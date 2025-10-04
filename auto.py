@@ -423,17 +423,26 @@ def main(args):
                 ign_keys = max(0, total_keys - red_keys)
                 ign_codes = max(0, total_codes - red_codes)
 
-                rk_word = "Key"  if red_keys  == 1 else "Keys"
-                rc_word = "Code" if red_codes == 1 else "Codes"
+                # Base words for ignored counts (used later)
                 ik_word = "Key"  if ign_keys  == 1 else "Keys"
                 ic_word = "Code" if ign_codes == 1 else "Codes"
 
-                if red_keys and red_codes:
-                    line = f"About to redeem {red_keys} {rk_word}, {red_codes} {rc_word} for {game} on {platform}"
-                elif red_keys:
-                    line = f"About to redeem {red_keys} {rk_word} for {game} on {platform}"
+                # Mode-aware label for what we WILL redeem in this queue
+                if args.golden:
+                    rk_label = "Golden Key" if red_keys == 1 else "Golden Keys"
+                elif args.non_golden:
+                    rk_label = "non-golden Key" if red_keys == 1 else "non-golden Keys"
                 else:
-                    line = f"About to redeem {red_codes} {rc_word} for {game} on {platform}"
+                    rk_label = "Key" if red_keys == 1 else "Keys"
+
+                rc_label = "Code" if red_codes == 1 else "Codes"
+
+                if red_keys and red_codes:
+                    line = f"About to redeem {red_keys} {rk_label}, {red_codes} {rc_label} for {game} on {platform}"
+                elif red_keys:
+                    line = f"About to redeem {red_keys} {rk_label} for {game} on {platform}"
+                else:
+                    line = f"About to redeem {red_codes} {rc_label} for {game} on {platform}"
 
                 # Compose ignore reasons (mode first, then limit)
                 extras = []
@@ -444,30 +453,38 @@ def main(args):
                     cd = len(codes_list)
                     if ng or cd:
                         extras.append(
-                            f"ignoring {ng} {'Key' if ng==1 else 'Keys'}, {cd} {'Code' if cd==1 else 'Codes'} due to --golden"
+                            f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'}, "
+                            f"{cd} {'Code' if cd==1 else 'Codes'} due to --golden"
                         )
-                    # Limit ignores: additional golden keys beyond cap
+                    # Limit ignores: additional GOLDEN keys beyond cap
                     if (lim > 0) and ign_keys:
-                        extras.append(f"plus {ign_keys} {ik_word} due to --limit")
+                        extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
 
                 elif args.non_golden:
-                    # Mode ignores: all golden keys
+                    # Mode ignores: all GOLDEN keys
                     g = len(golden_list)
                     if g:
                         extras.append(
-                            f"ignoring {g} {'Key' if g==1 else 'Keys'} due to --non-golden"
+                            f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --non-golden"
                         )
-                    # Limit ignores within non-golden domain (keys + codes)
+                    # Limit ignores within non-golden domain (non-golden keys + codes)
                     if (lim > 0) and (ign_keys or ign_codes):
                         if ign_keys and ign_codes:
-                            extras.append(f"plus {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit")
+                            extras.append(
+                                f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'}, "
+                                f"{ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
+                            )
                         elif ign_keys:
-                            extras.append(f"plus {ign_keys} {ik_word} due to --limit")
+                            extras.append(
+                                f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'} due to --limit"
+                            )
                         else:
-                            extras.append(f"plus {ign_codes} {ic_word} due to --limit")
+                            extras.append(
+                                f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
+                            )
 
                 else:
-                    # Default mode: only limit-based ignores
+                    # Default mode: only limit-based ignores (keys include golden + non-golden)
                     if (lim > 0) and (ign_keys or ign_codes):
                         if ign_keys and ign_codes:
                             extras.append(f"ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit")
