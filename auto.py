@@ -343,24 +343,34 @@ def main(args):
 
     with db:
         if not client:
-            # Decide which password to use. CLI may have been affected by shell history
-            # expansion (e.g. '!' truncation). Prefer environment SHIFT_PASS (or
-            # AUTOSHIFT_PASS_RAW) if it appears more complete.
+            # Decide which auth source to use.
+            # Priority:
+            #   1) CLI creds IF BOTH --user AND --pass are provided (avoid "cli" if only one was provided)
+            #   2) ENV password (SHIFT_PASS / AUTOSHIFT_PASS_RAW)
+            #   3) Cookies file (.cookies.save), else interactive prompt
             env_pw = os.getenv("SHIFT_PASS") or os.getenv("AUTOSHIFT_PASS_RAW")
-            chosen_pw = args.pw
-            pw_source = "cli"
-            if args.pw:
+
+            cookie_path = data_path(".cookies.save")
+            has_cookies = os.path.exists(cookie_path)
+
+            chosen_pw = None
+            pw_source = "cookies(.cookies.save)" if has_cookies else "prompt"
+
+            # Only treat as CLI if both user and pass were supplied
+            if args.user and args.pw:
+                chosen_pw = args.pw
+                pw_source = "cli"
                 # heuristic: if CLI pw contains '!' and env_pw looks longer, prefer env
                 if "!" in args.pw and env_pw and len(env_pw) > len(args.pw):
                     chosen_pw = env_pw
                     pw_source = "env(SHIFT_PASS/AUTOSHIFT_PASS_RAW)"
-            else:
-                # no CLI pw, use env if present
-                if env_pw:
-                    chosen_pw = env_pw
-                    pw_source = "env(SHIFT_PASS/AUTOSHIFT_PASS_RAW)"
+            elif env_pw:
+                chosen_pw = env_pw
+                pw_source = "env(SHIFT_PASS/AUTOSHIFT_PASS_RAW)"
+            # else: no cli pw, no env pw => rely on cookies or prompt
 
-            _L.debug(f"Using password from: {pw_source}")
+            # More accurate log (we may not be using a password at all if cookies exist)
+            _L.debug(f"Using auth from: {pw_source}")
             client = ShiftClient(args.user, chosen_pw)
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
