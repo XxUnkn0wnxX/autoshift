@@ -153,7 +153,7 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
             keys_list   = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
             total_keys  = sum(1 for k in keys_list if "key" in (k.reward or "").lower())
             total_codes = len(keys_list) - total_keys
-            _L.info(f"You have {total_keys} keys, {total_codes} Codes for {g} to redeem for {p}")
+            _L.info(f"You have {total_keys} Keys, {total_codes} Codes for {g} to redeem for {p}")
 
     return all_keys
 
