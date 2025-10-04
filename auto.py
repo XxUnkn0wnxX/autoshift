@@ -155,7 +155,7 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
                 for m in filter(
                     lambda m: m and m.group(1) is not None,
                     map(
-                        lambda key: query.r_golden_keys.match(key.reward),
+                        lambda key: query.r_golden_keys.match((key.reward or "")),
                         all_keys[g][p],
                     ),
                 )
@@ -371,7 +371,30 @@ def main(args):
                 t_keys = list(
                     filter(lambda key: not key.redeemed, all_keys[game][platform])
                 )
-                _L.info(f"Keys to be redeemed: {t_keys}")
+
+                # Summarise this batch by reward type for clearer logs
+                def _is_key_reward(k):
+                    try:
+                        return "key" in (k.reward or "").lower()
+                    except Exception:
+                        return False
+
+                total_keys = sum(1 for k in t_keys if _is_key_reward(k))
+                total_codes = len(t_keys) - total_keys
+
+                if total_keys and total_codes:
+                    _L.info(
+                        f"About to redeem {total_keys} Key(s), {total_codes} Code(s) for {game} on {platform}"
+                    )
+                elif total_keys:
+                    _L.info(
+                        f"About to redeem {total_keys} Key(s) for {game} on {platform}"
+                    )
+                else:
+                    _L.info(
+                        f"About to redeem {total_codes} Code(s) for {game} on {platform}"
+                    )
+
                 for num, key in enumerate(t_keys):
 
                     if (
@@ -385,7 +408,7 @@ def main(args):
 
                     _L.info(f"Key #{num+1}/{len(t_keys)} for {game} on {platform}")
                     num_g_keys = 0  # number of golden keys in this code
-                    m = r_golden_keys.match(key.reward)
+                    m = r_golden_keys.match(key.reward or "")
 
                     # skip keys we don't want
                     if (args.golden and not m) or (args.non_golden and m):
@@ -407,13 +430,28 @@ def main(args):
                     redeemed = redeem(key)
                     if redeemed:
                         args.limit -= num_g_keys
-                        _L.info(f"Redeeming another {args.limit} Keys")
+
+                        # Report what's left in THIS batch (Keys vs Codes)
+                        remaining_list = t_keys[num + 1 :]
+                        rem_keys = sum(1 for k in remaining_list if _is_key_reward(k))
+                        rem_codes = len(remaining_list) - rem_keys
+
+                        if rem_keys and rem_codes:
+                            _L.info(
+                                f"Redeeming another {rem_keys} Key(s), {rem_codes} Code(s)"
+                            )
+                        elif rem_keys:
+                            _L.info(f"Redeeming another {rem_keys} Key(s)")
+                        elif rem_codes:
+                            _L.info(f"Redeeming another {rem_codes} Code(s)")
+                        else:
+                            _L.info("No more codes left!")
                     else:
                         # don't spam if we reached the hourly limit
                         if client.last_status == Status.TRYLATER:
                             return
 
-        _L.info("No more keys left!")
+        _L.info("No more codes left!")
 
 
 if __name__ == "__main__":
