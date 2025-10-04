@@ -232,7 +232,7 @@ def setup_argparser():
         help="Only redeem Non-Golden keys",
     )
     # DEV NOTE: We split non-key codes (Unknown/cosmetics/etc.) into their own selectable group via --other.
-        #          Without --other, codes are excluded when a mode flag is used, matching requested behavior.
+    # Without --other, codes are excluded when a mode flag is used, matching requested behavior.
     parser.add_argument(
         "--other",
         action="store_true",
@@ -343,15 +343,17 @@ def main(args):
 
     with db:
         if not client:
-            # Decide which auth source to use.
-            # Priority:
-            #   1) CLI creds IF BOTH --user AND --pass are provided (avoid "cli" if only one was provided)
-            #   2) ENV password (SHIFT_PASS / AUTOSHIFT_PASS_RAW)
-            #   3) Cookies file (.cookies.save), else interactive prompt
+            # DEV NOTE: Password/credential source detection & debug logging
+            #   - Prefer CLI creds only if BOTH --user and --pass are provided.
+            #   - Else prefer env (SHIFT_PASS / AUTOSHIFT_PASS_RAW).
+            #   - Else rely on cookie jar if present, otherwise interactive prompt.
+            # The debug line logs the *auth source* (cli/env/cookies/prompt) so logs are truthful.
+
             env_pw = os.getenv("SHIFT_PASS") or os.getenv("AUTOSHIFT_PASS_RAW")
 
             cookie_path = data_path(".cookies.save")
             has_cookies = os.path.exists(cookie_path)
+            # DEV NOTE: If cookies exist we may not need a password at all; keep debug wording generic ('auth from').
 
             chosen_pw = None
             pw_source = "cookies(.cookies.save)" if has_cookies else "prompt"
@@ -370,6 +372,8 @@ def main(args):
             # else: no cli pw, no env pw => rely on cookies or prompt
 
             # More accurate log (we may not be using a password at all if cookies exist)
+            # DEV NOTE: This replaces the older, misleading 'Using password from:'
+            # because cookies imply no password may be used.
             _L.debug(f"Using auth from: {pw_source}")
             client = ShiftClient(args.user, chosen_pw)
 
@@ -746,7 +750,7 @@ if __name__ == "__main__":
         dump_db_to_csv(args.dump_csv)
         sys.exit(0)
 
-    if args.schedule and args.schedule < 2:
+    if args.schedule and args.schedule < 2: # DEV NOTE (Scheduling): Enforce minimum cadence of 2 hours to avoid platform blocks and to match log text.
         _L.warn(
             f"Running this tool every {args.schedule} hours would result in "
             "too many requests.\n"
@@ -766,8 +770,14 @@ if __name__ == "__main__":
 
         scheduler = BlockingScheduler()
         total_minutes = hours * 60 + minutes
+        # DEV NOTE (Scheduling): Use integer minutes on the interval trigger instead of a float 'hours='.
+        #   - Keeps APScheduler happy and supports fractional hours (HH:MM).
+        #   - Optional safety margin below nudges away from exact-hour collisions.
         # If you want a safety margin, add it here (e.g., +5).
         # total_minutes += 5
+        # Optionally add coalescing/misfire_grace_time if the process may sleep:
+        # scheduler.add_job(main, "interval", args=(args,), minutes=total_minutes, coalesce=True, misfire_grace_time=300)
+
         scheduler.add_job(main, "interval", args=(args,), minutes=total_minutes)
         print(f"Press Ctrl+{'Break' if os.name == 'nt' else 'C'} to exit")
 
