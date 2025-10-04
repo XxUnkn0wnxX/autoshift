@@ -150,10 +150,18 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
     # Always print info for all requested game/platform pairs
     for g in all_keys:
         for p in all_keys[g]:
-            keys_list   = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
-            total_keys  = sum(1 for k in keys_list if "key" in (k.reward or "").lower())
-            total_codes = len(keys_list) - total_keys
-            _L.info(f"You have {total_keys} Keys, {total_codes} Codes for {g} to redeem for {p}")
+            keys_list = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
+            # Split into Golden, non-golden Keys, and Codes to mirror the "About to redeem" summary
+            golden_count = sum(1 for k in keys_list if query.r_golden_keys.match((k.reward or "")))
+            non_golden_count = sum(
+                1
+                for k in keys_list
+                if ("key" in (k.reward or "").lower()) and not query.r_golden_keys.match((k.reward or ""))
+            )
+            codes_count = max(0, len(keys_list) - golden_count - non_golden_count)
+            _L.info(
+                f"You have {golden_count} Golden Keys, {non_golden_count} Non-Golden Keys, {codes_count} Other Codes for {g} to redeem for {p}"
+            )
 
     return all_keys
 
@@ -219,7 +227,7 @@ def setup_argparser():
         "--non-golden",
         dest="non_golden",
         action="store_true",
-        help="Only redeem non-golden keys",
+        help="Only redeem Non-Golden keys",
     )
     parser.add_argument(
         "--other",
@@ -491,7 +499,7 @@ def main(args):
                 elif args.golden:
                     rk_label = "Golden Key" if red_keys == 1 else "Golden Keys"
                 elif args.non_golden:
-                    rk_label = "non-golden Key" if red_keys == 1 else "non-golden Keys"
+                    rk_label = "Non-Golden Key" if red_keys == 1 else "Non-Golden Keys"
                 else:
                     rk_label = "Key" if red_keys == 1 else "Keys"
 
@@ -525,7 +533,7 @@ def main(args):
                             c_ign   = max(0, len(codes_list) - c_take)
                         extras.append(
                             f"plus {g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}, "
-                            f"{ng_ign} {'non-golden Key' if ng_ign==1 else 'non-golden Keys'}, "
+                            f"{ng_ign} {'Non-Golden Key' if ng_ign==1 else 'Non-Golden Keys'}, "
                             f"{c_ign} {'Code' if c_ign==1 else 'Codes'} due to --limit"
                         )
 
@@ -534,12 +542,12 @@ def main(args):
                     ng = len(nongolden_key_list)
                     if args.other:
                         extras.append(
-                            f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --golden"
+                            f"ignoring {ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'} due to --golden"
                         )
                     else:
                         cd_ignore = len(codes_list)
                         extras.append(
-                            f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'}, "
+                            f"ignoring {ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'}, "
                             f"{cd_ignore} {'Code' if cd_ignore==1 else 'Codes'} due to --golden"
                         )
                     # Limit ignores (always show lines)
@@ -560,7 +568,7 @@ def main(args):
                         )
                     # Limit ignores (always show combined)
                     extras.append(
-                        f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'}, "
+                        f"plus {ign_keys} {'Non-Golden Key' if ign_keys==1 else 'Non-Golden Keys'}, "
                         f"{ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
                     )
 
@@ -570,7 +578,7 @@ def main(args):
                     ng = len(nongolden_key_list)
                     extras.append(
                         f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'}, "
-                        f"{ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
+                        f"{ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'} due to --other"
                     )
                     # Limit ignores (always show)
                     extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
