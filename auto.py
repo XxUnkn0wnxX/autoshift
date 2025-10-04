@@ -718,7 +718,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # DEV NOTE: Enforce mutual exclusivity for mode flags per product spec.
-    #          If users want all categories, they should omit --golden/--non-golden/--other.
+    # If users want all categories, they should omit --golden/--non-golden/--other.
     # Enforce mutual exclusivity for mode flags: choose only one, or none for all
     mode_count = int(bool(getattr(args, 'golden', False))) + int(bool(getattr(args, 'non_golden', False))) + int(bool(getattr(args, 'other', False)))
     if mode_count > 1:
@@ -742,6 +742,7 @@ if __name__ == "__main__":
             "too many requests.\n"
             "Scheduling changed to run every 2 hours!"
         )
+        args.schedule = 2.0
 
     # always execute at least once
     main(args)
@@ -754,9 +755,10 @@ if __name__ == "__main__":
         from apscheduler.schedulers.blocking import BlockingScheduler
 
         scheduler = BlockingScheduler()
-        # fire every 1h5m (to prevent being blocked by the shift platform.)
-        #  (5min safe margin because it somtimes fires a few seconds too early)
-        scheduler.add_job(main, "interval", args=(args,), hours=args.schedule)
+        total_minutes = hours * 60 + minutes
+        # If you want a safety margin, add it here (e.g., +5).
+        # total_minutes += 5
+        scheduler.add_job(main, "interval", args=(args,), minutes=total_minutes)
         print(f"Press Ctrl+{'Break' if os.name == 'nt' else 'C'} to exit")
 
         try:
