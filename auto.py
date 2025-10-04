@@ -385,7 +385,22 @@ def main(args):
                 # ---- per-pair limit and base queue (mode-aware + --other) ----
                 lim = args.limit if getattr(args, "limit", 0) and args.limit > 0 else 0
 
-                if args.golden:
+                union_mode = bool(args.golden and args.non_golden)
+                other_only = bool(args.other and not args.golden and not args.non_golden)
+
+                if union_mode:
+                    # Golden + non-golden; include Codes only if --other
+                    base_queue = golden_list + nongolden_key_list + (codes_list if args.other else [])
+                    total_keys  = len(golden_list) + len(nongolden_key_list)
+                    total_codes = len(codes_list) if args.other else 0
+
+                elif other_only:
+                    # Codes only
+                    base_queue = codes_list
+                    total_keys  = 0
+                    total_codes = len(codes_list)
+
+                elif args.golden:
                     # Codes only included if --other is set
                     base_queue = golden_list + (codes_list if args.other else [])
                     total_keys  = len(golden_list)
@@ -405,16 +420,37 @@ def main(args):
 
                 # ---- Apply per-pair limit ----
                 if lim > 0:
-                    if args.golden:
-                        g_take = min(total_keys, lim)
+                    if union_mode:
+                        # Golden → non-golden → Codes(if --other)
+                        g_take  = min(len(golden_list), lim)
+                        rem     = lim - g_take
+                        ng_take = min(len(nongolden_key_list), max(0, rem))
+                        rem2    = rem - ng_take
+                        c_take  = min(len(codes_list), max(0, rem2)) if args.other else 0
+
+                        red_keys  = g_take + ng_take
+                        red_codes = c_take
+                        redeem_queue = golden_list[:g_take] + nongolden_key_list[:ng_take] + (codes_list[:c_take] if args.other else [])
+
+                    elif other_only:
+                        # Codes only
+                        c_take = min(len(codes_list), lim)
+                        red_keys  = 0
+                        red_codes = c_take
+                        redeem_queue = codes_list[:c_take]
+
+                    elif args.golden:
+                        # Golden → Codes(if --other)
+                        g_take = min(len(golden_list), lim)
                         rem    = lim - g_take
-                        c_take = min(total_codes, max(0, rem)) if args.other else 0
+                        c_take = min(len(codes_list), max(0, rem)) if args.other else 0
 
                         red_keys  = g_take
                         red_codes = c_take
                         redeem_queue = golden_list[:g_take] + (codes_list[:c_take] if args.other else [])
 
                     elif args.non_golden:
+                        # non-golden → Codes(if --other)
                         k_take = min(len(nongolden_key_list), lim)
                         rem    = lim - k_take
                         c_take = min(len(codes_list), max(0, rem)) if args.other else 0
@@ -424,6 +460,7 @@ def main(args):
                         redeem_queue = nongolden_key_list[:k_take] + (codes_list[:c_take] if args.other else [])
 
                     else:
+                        # Default: Golden → non-golden → Codes
                         g_take  = min(len(golden_list), lim)
                         rem     = lim - g_take
                         ng_take = min(len(nongolden_key_list), max(0, rem))
@@ -447,7 +484,9 @@ def main(args):
                 ic_word = "Code" if ign_codes == 1 else "Codes"
 
                 # Mode-aware label for keys we WILL redeem
-                if args.golden:
+                if union_mode:
+                    rk_label = "Key" if red_keys == 1 else "Keys"
+                elif args.golden:
                     rk_label = "Golden Key" if red_keys == 1 else "Golden Keys"
                 elif args.non_golden:
                     rk_label = "non-golden Key" if red_keys == 1 else "non-golden Keys"
@@ -467,7 +506,34 @@ def main(args):
                 # ---- Compose ignore reasons (mode first, then limit) ----
                 extras = []
 
-                if args.golden:
+                if union_mode:
+                    # Mode ignores: only Codes when --other is NOT set
+                    if not args.other and len(codes_list):
+                        extras.append(
+                            f"ignoring {len(codes_list)} {'Code' if len(codes_list)==1 else 'Codes'} (use --other to include)"
+                        )
+                    # Limit ignores (granular): compute how many of each were capped out
+                    if (lim > 0):
+                        g_ign = max(0, len(golden_list) - min(len(golden_list), lim))
+                        ng_cap = max(0, len(nongolden_key_list) - max(0, min(len(nongolden_key_list), max(0, lim - min(len(golden_list), lim)))))
+                        c_ign = 0
+                        if args.other:
+                            g_take  = min(len(golden_list), lim)
+                            ng_take = min(len(nongolden_key_list), max(0, lim - g_take))
+                            c_take  = min(len(codes_list), max(0, lim - g_take - ng_take))
+                            c_ign   = max(0, len(codes_list) - c_take)
+
+                        parts = []
+                        if g_ign:
+                            parts.append(f"{g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}")
+                        if ng_ign := ng_cap:
+                            parts.append(f"{ng_ign} {'non-golden Key' if ng_ign==1 else 'non-golden Keys'}")
+                        if c_ign:
+                            parts.append(f"{c_ign} {'Code' if c_ign==1 else 'Codes'}")
+                        if parts:
+                            extras.append("plus " + ", ".join(parts) + " due to --limit")
+
+                elif args.golden:
                     # Mode ignores: all non-golden keys (+ codes only if not --other)
                     ng = len(nongolden_key_list)
                     cd_ignore = 0 if args.other else len(codes_list)
@@ -531,18 +597,16 @@ def main(args):
 
                 _L.info(line)
 
-                # effective denominators for Key #i/N and Code #i/N
-                effective_queue = redeem_queue
-                queue_keys_len  = sum(1 for k in effective_queue if _is_key_reward(k))
-                queue_codes_len = len(effective_queue) - queue_keys_len
+                # Prepare per-iteration counters for Key/Code progress
+                queue_keys_len  = sum(1 for k in redeem_queue if _is_key_reward(k))
+                queue_codes_len = len(redeem_queue) - queue_keys_len
                 k_index = 0
                 c_index = 0
 
-                for num, key in enumerate(redeem_queue):
-
-                    if (
-                        num and not (num % 15)
-                    ) or client.last_status == Status.SLOWDOWN:
+                # Iterate and redeem
+                for idx, key in enumerate(redeem_queue):
+                    # polite throttling
+                    if (idx and not (idx % 15)) or client.last_status == Status.SLOWDOWN:
                         if client.last_status == Status.SLOWDOWN:
                             _L.info("Slowing down a bit..")
                         else:
@@ -552,11 +616,19 @@ def main(args):
                     # Decide golden/non-golden for this item
                     m = r_golden_keys.match(key.reward or "")
 
-                    # Skip items that won't be attempted in this mode
-                    if args.golden:
-                        if _is_golden(key):
+                    # Skip items that won't be attempted in this mode (belt-and-braces)
+                    if union_mode:
+                        if _is_key_reward(key) or (args.other and not _is_key_reward(key)):
                             pass
-                        elif args.other and (not _is_key_reward(key)):  # allow Codes only if --other
+                        else:
+                            _L.debug("Skipping Code in union mode (no --other)")
+                            continue
+                    elif other_only:
+                        if _is_key_reward(key):
+                            _L.debug("Skipping Key in --other-only mode")
+                            continue
+                    elif args.golden:
+                        if _is_golden(key) or (args.other and not _is_key_reward(key)):
                             pass
                         else:
                             _L.debug("Skipping item in --golden mode")
@@ -565,12 +637,12 @@ def main(args):
                         if _is_golden(key):
                             _L.debug("Skipping Golden in --non-golden mode")
                             continue
-                        if (not _is_key_reward(key)) and (not args.other):  # skip Codes unless --other
+                        if (not _is_key_reward(key)) and (not args.other):
                             _L.debug("Skipping Code (no --other)")
                             continue
                     # else: default mode allows all
 
-                    # Print the correct per-item counter AFTER we know we won't skip it
+                    # Per-item progress line
                     if _is_key_reward(key):
                         k_index += 1
                         label = f"Key #{k_index}/{queue_keys_len}"
@@ -579,24 +651,13 @@ def main(args):
                         label = f"Code #{c_index}/{queue_codes_len}"
                     _L.info(f"{label} for {game} on {platform}")
 
-                    num_g_keys = 0  # number of golden keys in this code
-
-                    if m:
-                        try:
-                            num_g_keys = int(m.group(1) or 1)
-                        except Exception:
-                            num_g_keys = 1
-
-                    # Always attempt redeem (queue already respects mode/limit)
+                    # Attempt redeem
                     redeemed = redeem(key)
 
                     if redeemed:
-                        # global cap handled by run_lim
-
                         # Report what's left in THIS batch (Keys vs Codes)
                         rem_keys  = max(0, queue_keys_len  - k_index)
                         rem_codes = max(0, queue_codes_len - c_index)
-
                         if rem_keys and rem_codes:
                             _L.info(
                                 f"Redeeming another {rem_keys} {'Key' if rem_keys==1 else 'Keys'}, {rem_codes} {'Code' if rem_codes==1 else 'Codes'}"
