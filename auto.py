@@ -494,31 +494,32 @@ def main(args):
                 ign_keys  = max(0, total_keys  - red_keys)
                 ign_codes = max(0, total_codes - red_codes)
 
-                # Words
-                ik_word = "Key"  if ign_keys  == 1 else "Keys"
-                ic_word = "Code" if ign_codes == 1 else "Codes"
-
-                # Mode-aware label for keys we WILL redeem
-                if union_mode:
-                    rk_label = "Key" if red_keys == 1 else "Keys"
-                elif args.golden:
-                    rk_label = "Golden Key" if red_keys == 1 else "Golden Keys"
-                elif args.non_golden:
-                    rk_label = "Non-Golden Key" if red_keys == 1 else "Non-Golden Keys"
+                # Build the "About to redeem …" header label based on flags
+                # For --golden / --non-golden: always use "Key/Keys"
+                # For --other: always use "Code/Codes"
+                # For no mode flags: if both present show both (lowercase), else show the one present
+                if args.golden or args.non_golden:
+                    main_count = red_keys
+                    main_label = "Key" if red_keys == 1 else "Keys"
+                    line = f"About to redeem {main_count} {main_label} for {game} on {platform}"
+                elif args.other:
+                    main_count = red_codes
+                    main_label = "Code" if red_codes == 1 else "Codes"
+                    line = f"About to redeem {main_count} {main_label} for {game} on {platform}"
                 else:
-                    rk_label = "Key" if red_keys == 1 else "Keys"
+                    if red_keys and red_codes:
+                        rk = "key" if red_keys == 1 else "keys"
+                        rc = "code" if red_codes == 1 else "codes"
+                        line = f"About to redeem {red_keys} {rk}, {red_codes} {rc} for {game} on {platform}"
+                    else:
+                        if red_keys:
+                            rk = "key" if red_keys == 1 else "keys"
+                            line = f"About to redeem {red_keys} {rk} for {game} on {platform}"
+                        else:
+                            rc = "code" if red_codes == 1 else "codes"
+                            line = f"About to redeem {red_codes} {rc} for {game} on {platform}"
 
-                rc_label = "Code" if red_codes == 1 else "Codes"
-
-                # Header line
-                if red_keys and red_codes:
-                    line = f"About to redeem {red_keys} {rk_label}, {red_codes} {rc_label} for {game} on {platform}"
-                elif red_keys:
-                    line = f"About to redeem {red_keys} {rk_label} for {game} on {platform}"
-                else:
-                    line = f"About to redeem {red_codes} {rc_label} for {game} on {platform}"
-
-                # ---- Rebuilt header ignore summary (simple & mode-specific) ----
+                # ---- Rebuilt header ignore summary (simple & mode-specific) ---- (simple & mode-specific) ----
                 explicit_limit = ("--limit" in sys.argv)
 
                 g_total  = len(golden_list)
