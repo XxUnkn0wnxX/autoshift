@@ -425,7 +425,7 @@ Example: `--schedule --golden --limit 30`
 |`--golden`|Only redeem golden keys|
 |`--non-golden`|Only redeem non-golden keys|
 |`--limit n`|Max number of golden keys you want to redeem|
-|`--schedule`|Keep checking for keys and redeeming every hour|
+|`--schedule`|Keep checking for keys and redeeming every hour (not supported with manual single-code `--redeem`)|
 |`-v`|Verbose mode|
 
 

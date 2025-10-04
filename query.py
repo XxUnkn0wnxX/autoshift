@@ -49,6 +49,25 @@ except Exception:
 
 
 _BANNER_SHOWN = False
+_CODE_MIGRATIONS_CHECKED = False
+
+
+def _ensure_code_format_migrated() -> None:
+    """Run legacy code-format cleanup once per process when DB access is required."""
+
+    global _CODE_MIGRATIONS_CHECKED
+    if _CODE_MIGRATIONS_CHECKED:
+        return
+
+    try:
+        from migrations import migrate_shift_codes
+    except ImportError:
+        _L.warning("Migrations module not found. Skipping code format migration.")
+        _CODE_MIGRATIONS_CHECKED = True
+        return
+
+    migrate_shift_codes()
+    _CODE_MIGRATIONS_CHECKED = True
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 
@@ -299,6 +318,7 @@ class Database(ContextManager):
         if self.__open:
             return
 
+        _ensure_code_format_migrated()
         makedirs(DATA_DIR, exist_ok=True)
         self.__conn = sqlite3.connect(
             data_path("keys.db"), detect_types=sqlite3.PARSE_DECLTYPES

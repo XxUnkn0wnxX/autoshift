@@ -65,8 +65,8 @@ def redeem(key: "Key"):
     status = client.redeem(key.code, query.known_games[key.game], key.platform)
     _L.debug(f"Status: {status}")
 
-    # set redeemed status
-    if status in (Status.SUCCESS, Status.REDEEMED, Status.EXPIRED, Status.INVALID):
+    # set redeemed status only for positive outcomes
+    if status in (Status.SUCCESS, Status.REDEEMED):
         query.db.set_redeemed(key)
 
     # notify user
@@ -272,6 +272,7 @@ def setup_argparser():
             Specify redemption targets.
             Mapping mode: bl3:steam,epic bl2:epic
             Manual mode: SHiFT code or code:platform[,platform...] to filter targets.
+            Manual mode cannot be combined with --schedule.
         """),
     )
     parser.add_argument(

@@ -36,6 +36,8 @@ class ManualContext:
     platforms_to_probe: Sequence[str]
     scheduled: bool
     platform_filter: Optional[Sequence[str]]
+    db_had_code: bool
+    json_metadata: Sequence[Key]
 
 
 # DEV NOTE: Public entry point -------------------------------------------------
@@ -80,10 +82,12 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
     )
 
     # DEV NOTE: Kick off the redeem loop and capture per-attempt statuses for summary + exit decisions.
-    results = _redeem_across_targets(context, shift_client, redeem_cb)
+    base_key, results = _redeem_across_targets(context, shift_client, redeem_cb)
 
     any_success = any(_is_positive_status(result.status) for result in results)
     hit_try_later = any(result.status == Status.TRYLATER for result in results)
+
+    _sync_manual_key_records(context, base_key, results)
 
     _summarize_results(context, results, any_success, hit_try_later, verbose)
 
@@ -187,7 +191,7 @@ def _build_manual_context(
     scheduled: bool,
     platform_filter: Optional[Sequence[str]],
 ) -> ManualContext:
-    reward, resolved_game = _resolve_code_metadata(code)
+    reward, resolved_game, db_had_code, json_metadata = _collect_code_metadata(code)
     games_to_probe = _determine_games_to_probe(resolved_game)
 
     if platform_filter:
@@ -205,22 +209,37 @@ def _build_manual_context(
         platforms_to_probe=platforms_to_probe,
         scheduled=scheduled,
         platform_filter=platform_filter,
+        db_had_code=db_had_code,
+        json_metadata=json_metadata,
     )
 
 
-def _resolve_code_metadata(code: str) -> tuple[str, Optional[str]]:
-    """Return (reward, game) by checking DB first, then SHIFT_SOURCE JSON."""
+def _collect_code_metadata(code: str) -> tuple[str, Optional[str], bool, Sequence[Key]]:
+    """Return metadata plus source flags for a manual code."""
 
-    key_from_db = _fetch_db_key(code)
-    if key_from_db:
-        # DEV NOTE: Trust DB first; reward/game already normalized when inserted.
-        return key_from_db.reward or "Unknown", key_from_db.game
+    db_keys = _fetch_db_keys(code)
+    if db_keys:
+        key = _fetch_db_key(code) or db_keys[0]
+        return key.reward or "Unknown", key.game, True, ()
 
-    key_from_json = _fetch_json_key(code)
-    if key_from_json:
-        return key_from_json.reward or "Unknown", key_from_json.game
+    json_matches = tuple(_fetch_json_keys(code))
+    if json_matches:
+        head = json_matches[0]
+        return head.reward or "Unknown", head.game, False, json_matches
 
-    return "Unknown", None
+    return "Unknown", None, False, ()
+
+
+def _fetch_db_keys(code: str) -> list[Key]:
+    rows = query.db.execute(
+        """
+        SELECT * FROM keys
+        WHERE code = ?
+        ORDER BY id ASC
+        """,
+        (code,),
+    ).fetchall()
+    return [Key(**{col: row[col] for col in row.keys()}) for row in rows]
 
 
 def _fetch_db_key(code: str) -> Optional[Key]:
@@ -243,19 +262,39 @@ def _fetch_db_key(code: str) -> Optional[Key]:
     return Key(**{col: row[col] for col in row.keys()})
 
 
-def _fetch_json_key(code: str) -> Optional[Key]:
-    # DEV NOTE: parse_shift_orcicorn() may trigger a network read; log failures but keep manual flow resilient.
+def _key_exists_in_db(code: str, game: str, platform: str) -> bool:
+    row = query.db.execute(
+        """
+        SELECT 1 FROM keys
+        WHERE code = ? AND game = ? AND platform = ?
+        LIMIT 1
+        """,
+        (code, game, platform),
+    ).fetchone()
+    return bool(row)
+
+
+def _fetch_json_keys(code: str) -> list[Key]:
+    normalized = code.upper()
+
     try:
         keys: Iterable[Key] = query.parse_shift_orcicorn() or []
     except Exception as exc:
         _L.warning(f"Manual redeem could not read SHiFT source ({exc}); using fallback metadata.")
-        return None
+        return []
 
+    matches: list[Key] = []
     for key in keys:
-        if (_normalize_shift_code(key.code) or "").upper() == code.upper():
-            return key
+        normalized_candidate = _normalize_shift_code(key.code)
+        if (normalized_candidate or "").upper() == normalized:
+            matches.append(key)
 
-    return None
+    return matches
+
+
+def _fetch_json_key(code: str) -> Optional[Key]:
+    matches = _fetch_json_keys(code)
+    return matches[0] if matches else None
 
 
 def _determine_games_to_probe(resolved_game: Optional[str]) -> Sequence[str]:
@@ -274,10 +313,13 @@ class AttemptResult:
     status: Status
 
 
-def _redeem_across_targets(context: ManualContext, shift_client, redeem_cb) -> List[AttemptResult]:
+def _redeem_across_targets(
+    context: ManualContext, shift_client, redeem_cb
+) -> tuple[Key, List[AttemptResult]]:
+    base_key = _ensure_base_key(context)
     results: List[AttemptResult] = []
+
     for game_index, game in enumerate(context.games_to_probe, start=1):
-        base_key = _ensure_base_key(context.code, game, context.reward)
         _L.info(
             f"Manual redeem: Game {game_index}/{len(context.games_to_probe)} -> {game}"
         )
@@ -307,59 +349,132 @@ def _redeem_across_targets(context: ManualContext, shift_client, redeem_cb) -> L
                 sleep(60)
             if status == Status.TRYLATER:
                 _L.info("Manual redeem received TRY LATER; stopping further attempts.")
-                return results
+                return base_key, results
 
-    return results
+    return base_key, results
 
 
-def _ensure_base_key(code: str, game: str, reward: str) -> Key:
-    # DEV NOTE: We want a stable key id per (code, game). Prefer a universal platform row or create one.
+def _ensure_base_key(context: ManualContext) -> Key:
+    # DEV NOTE: Seed a persistent DB row per code so manual runs can track redeemed status.
     existing = query.db.execute(
         """
         SELECT * FROM keys
-        WHERE code = ? AND game = ?
-        ORDER BY CASE WHEN platform='universal' THEN 0 ELSE 1 END, id DESC
+        WHERE code = ?
+        ORDER BY id DESC
         LIMIT 1
         """,
-        (code, game),
+        (context.code,),
     ).fetchone()
 
     if existing:
-        row = existing
-        if row["platform"] != "universal":
-            universal = query.db.execute(
-                """
-                SELECT * FROM keys
-                WHERE code = ? AND game = ? AND platform = 'universal'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (code, game),
-            ).fetchone()
-            if universal:
-                row = universal
-        return Key(**{col: row[col] for col in row.keys()})
+        return Key(**{col: existing[col] for col in existing.keys()})
 
-    reward_value = reward or "Unknown"
+    seed: Optional[Key] = None
+    if context.json_metadata:
+        seed = next(
+            (meta for meta in context.json_metadata if meta.platform in context.platforms_to_probe),
+            context.json_metadata[0],
+        )
+
+    reward_value = (seed.reward if seed else context.reward) or "Unknown"
+    game_value = (seed.game if seed and seed.game else context.resolved_game) or "manual"
+    platform_value = (seed.platform if seed and seed.platform else "manual")
+
     query.db.execute(
-        "INSERT INTO keys(reward, code, platform, game) VALUES (?, ?, 'universal', ?)",
-        (reward_value, code, game),
+        "INSERT INTO keys(reward, code, platform, game) VALUES (?, ?, ?, ?)",
+        (reward_value, context.code, platform_value, game_value),
     )
     query.db.commit()
 
     created = query.db.execute(
         """
         SELECT * FROM keys
-        WHERE code = ? AND game = ? AND platform = 'universal'
+        WHERE code = ?
         ORDER BY id DESC
         LIMIT 1
         """,
-        (code, game),
+        (context.code,),
     ).fetchone()
     if not created:
         raise RuntimeError("Failed to ensure base key for manual redeem.")
 
     return Key(**{col: created[col] for col in created.keys()})
+
+
+# DEV NOTE: Persist manual metadata once we know the outcome --------------------
+def _sync_manual_key_records(
+    context: ManualContext, base_key: Key, results: Sequence[AttemptResult]
+) -> None:
+    if context.db_had_code:
+        return
+
+    positive_platforms: list[str] = []
+    for result in results:
+        if _is_positive_status(result.status) and result.platform not in positive_platforms:
+            positive_platforms.append(result.platform)
+
+    if not positive_platforms:
+        return
+
+    base_id = getattr(base_key, "id", None)
+    if base_id is None:
+        row = query.db.execute(
+            "SELECT id FROM keys WHERE code = ? ORDER BY id DESC LIMIT 1",
+            (context.code,),
+        ).fetchone()
+        base_id = row["id"] if row else None
+    if base_id is None:
+        return
+
+    metadata_lookup = {meta.platform: meta for meta in context.json_metadata}
+    universal_meta = metadata_lookup.get("universal")
+    metadata_matches: dict[str, Key] = {}
+    unmatched_platforms: list[str] = []
+
+    for platform in positive_platforms:
+        meta = metadata_lookup.get(platform) if metadata_lookup else None
+        if meta or universal_meta:
+            chosen = meta or universal_meta
+            platform_key = chosen.platform or platform
+            if platform_key not in metadata_matches:
+                metadata_matches[platform_key] = chosen
+        else:
+            unmatched_platforms.append(platform)
+
+    updated_base = False
+
+    for meta_platform, meta in metadata_matches.items():
+        reward_value = (meta.reward if meta and meta.reward else context.reward) or "Unknown"
+        game_value = (meta.game if meta and meta.game else context.resolved_game) or "manual"
+        platform_value = meta_platform or "manual"
+        if not updated_base:
+            query.db.execute(
+                "UPDATE keys SET reward = ?, platform = ?, game = ? WHERE id = ?",
+                (reward_value, platform_value, game_value, base_id),
+            )
+            updated_base = True
+        elif not _key_exists_in_db(context.code, game_value, platform_value):
+            query.db.execute(
+                "INSERT INTO keys(reward, code, platform, game) VALUES (?, ?, ?, ?)",
+                (reward_value, context.code, platform_value, game_value),
+            )
+
+    for platform in unmatched_platforms:
+        reward_value = context.reward or "Unknown"
+        game_value = context.resolved_game or "manual"
+        if not updated_base:
+            query.db.execute(
+                "UPDATE keys SET reward = ?, platform = ?, game = ? WHERE id = ?",
+                (reward_value, platform, game_value, base_id),
+            )
+            updated_base = True
+        elif not _key_exists_in_db(context.code, game_value, platform):
+            query.db.execute(
+                "INSERT INTO keys(reward, code, platform, game) VALUES (?, ?, ?, ?)",
+                (reward_value, context.code, platform, game_value),
+            )
+
+    query.db.commit()
 
 
 # DEV NOTE: Flag validation -----------------------------------------------------
@@ -425,4 +540,3 @@ def _summarize_results(
         outcome_label += ", TRY-LATER encountered"
 
     _L.info(f"Manual redeem outcome: {outcome_label}.")
-

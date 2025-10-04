@@ -47,14 +47,6 @@ except Exception:
         return os.path.join(DATA_DIR, *parts)
 
 
-# Run code format migration at startup
-try:
-    from migrations import migrate_shift_codes
-
-    migrate_shift_codes()
-except ImportError:
-    _L.warning("Migrations module not found. Skipping code format migration.")
-
 base_url = "https://shift.gearboxsoftware.com"
 
 
