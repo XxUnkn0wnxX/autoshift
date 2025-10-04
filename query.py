@@ -450,7 +450,7 @@ def progn(*args: _VT) -> _VT:
 
 # Add configurable source for the shift JSON
 SHIFT_SOURCE = (
-    "https://raw.githubusercontent.com/zarmstrong/autoshift-codes/main/shiftcodes.json"
+    "https://raw.githubusercontent.com/XxUnkn0wnxX/autoshift-codes/main/shiftcodes.json"
 )
 
 

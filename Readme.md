@@ -2,21 +2,21 @@
 
 - **Compatibility:** 3.9+.
 - **Platform:** Crossplatform.
-- **Repo:** https://github.com/zarmstrong/autoshift forked from https://github.com/ugoogalizer/autoshift forked from https://github.com/Fabbi/autoshift
+- **Repo:** https://github.com/XxUnkn0wnxX/autoshift forked from https://github.com/zarmstrong/autoshift forked from https://github.com/ugoogalizer/autoshift forked from https://github.com/Fabbi/autoshift
 
 # Overview
 
-Data provided by Mental Mars' Websites via this [shiftcodes.json](https://raw.githubusercontent.com/zarmstrong/autoshift-codes/main/shiftcodes.json) file that is updated reguarly by an instance of [this scraper](https://github.com/zarmstrong/autoshift-scraper).  You don't need to run the scraper as well, only this `autoshift` script/container.  This is to reduce the burden on the Mental Mars website given the great work they're doing to make this possible.<br>
-
-This documentation intended to be temporary until Issue [#53](https://github.com/Fabbi/autoshift/issues/53) and PR [#54](https://github.com/Fabbi/autoshift/pull/54) in the the upstream [autoshift by Fabbi](https://github.com/Fabbi/autoshift/) is merged in.
+Data provided by Mental Mars' Websites via this [shiftcodes.json](https://raw.githubusercontent.com/XxUnkn0wnxX/autoshift-codes/main/shiftcodes.json) file that is updated reguarly by an instance of [this scraper](https://github.com/zarmstrong/autoshift-scraper).  You don't need to run the scraper as well, only this `autoshift` script/container.  This is to reduce the burden on the Mental Mars website given the great work they're doing to make this possible.<br>
 
 `autoshift` detects and memorizes new games and platforms added to the orcicorn shift key database.
 
-Games currently maintained by mental mars that are scraped and made available to `autoshift` are: 
+Games currently that are scraped and made available to `autoshift` are: 
 - [Borderlands](https://mentalmars.com/game-news/borderlands-golden-keys/)
 - [Borderlands 2](https://mentalmars.com/game-news/borderlands-2-golden-keys/)
 - [Borderlands 3](https://mentalmars.com/game-news/borderlands-3-golden-keys/)
-- [Borderlands 4](https://mentalmars.com/game-news/borderlands-4-shift-codes/)
+- Borderlands 4  
+
+  > [mentalmars](https://mentalmars.com/game-news/borderlands-4-shift-codes/) |  [polygon](https://www.polygon.com/borderlands-4-active-shift-codes-redeem/) | [ign](https://www.ign.com/wikis/borderlands-4/Borderlands_4_SHiFT_Codes) | [xsmashx88x](https://xsmashx88x.github.io/Shift-Codes/)
 - [Borderlands The Pre-Sequel](https://mentalmars.com/game-news/bltps-golden-keys/)
 - [Tiny Tina's Wonderlands](https://mentalmars.com/game-news/tiny-tinas-wonderlands-shift-codes)
 
@@ -32,7 +32,7 @@ You can choose to only redeem mods/skins etc, only golden keys or both. There is
 ## Installation
 
 ```sh
-git clone git@github.com:zarmstrong/autoshift.git
+git clone git@github.com:XxUnkn0wnxX/autoshift.git
 ```
 
 or download it as zip
@@ -61,6 +61,7 @@ This is expected and only happens once; subsequent runs will be fast.
 
 You can now specify exactly which platforms should redeem which games' SHiFT codes using the `--redeem` argument.  
 **Recommended:** Use `--redeem` for fine-grained control.  
+**Manual:** Provide a single SHiFT code (with an optional platform filter) to trigger the manual redeem flow.  
 **Legacy:** You can still use `--games` and `--platforms` together, but a warning will be printed and all games will be redeemed on all platforms.
 
 ### New (Recommended) Usage
@@ -79,6 +80,22 @@ You can now specify exactly which platforms should redeem which games' SHiFT cod
 ```sh
 ./auto.py --redeem bl3:steam,epic --golden --limit 10
 ```
+
+### Manual Single-Code Usage
+
+- Redeem a code across every supported platform:
+```sh
+./auto.py --redeem J9RT3-RBJ5T-WRTBK-JB3J3-5TB3R --shift-source data/shiftcodes.json --profile myprofile
+```
+
+- Redeem a code on specific platforms:
+```sh
+./auto.py --redeem J9RT3-RBJ5T-WRTBK-JB3J3-5TB3R:psn,xbox --shift-source data/shiftcodes.json --profile myprofile
+```
+
+Manual mode treats **already redeemed** responses the same as successes and prints a concise `Manual redeem outcome:` summary. It will skip inserting duplicate rows when the SHiFT source already contains metadata for the code.
+
+> **Manual mode restrictions**: `--schedule`, `--limit`, `--games`, `--platforms`, `--golden`, `--non-golden`, and `--other` are rejected when you supply a single code. Use mapping mode instead if you need those flags.
 
 ### Legacy Usage (still supported, but prints a warning)
 
@@ -132,7 +149,7 @@ env:
 Notes
 - CLI --shift-source overrides the SHIFT_SOURCE environment variable.
 - If the source is a local path inside the container, ensure the file is present in the container filesystem (mounted volume, image, etc.).
-- The tool validates and logs the selected source at startup so you can confirm which file/URL is being used.
+- The tool validates and logs the selected source at startup so you can confirm which file/URL is being used. Manual redeems reuse this metadata when populating the database; if the code is missing from the source, it falls back to a generic record.
 
 ## Profiles (per-user data)
 
@@ -192,28 +209,35 @@ env:
 
 ## Code
 
-This tool consists of 3 parts:
-
-### `shift.py`
-
-This module handles the redemption of the SHiFT codes and could be used as standalone CLI tool to manually enter those codes.
-It queries login credentials on first use and saves the needed cookie to enable auto-login.
-
-### `query.py`
-
-This module parses the codes from wherever they may come from and creates/maintains the database.
-If you'd want to add other sources for SHiFT codes or future games, you'd make that here.
-
+Core modules and their responsibilities:
 
 ### `auto.py`
+Entry point for the CLI. Parses arguments, wires profiles/SHIFT sources, and orchestrates either mapping mode or manual single-code redeems. It shares the `redeem()` helper across modes so logging and database updates stay consistent.
 
-This one is the commandline interface you call to use this tool.
+### `m_redeem.py`
+Manual single-code workflow. Normalises `CODE` / `CODE:platform` arguments, validates unsupported flags, drives the platform probe loop, and writes back metadata to the database without disturbing existing rows.
+
+### `shift.py`
+Thin wrapper around Gearbox SHiFT endpoints. Manages login, cookie reuse, and translates response messages into `Status` codes consumed by the rest of the app.
+
+### `query.py`
+Database gateway and SHIFT-source parsing logic. Handles migrations on demand, tracks known games/platforms, and exposes helpers for inserting keys, marking redemptions, and loading external JSON.
+
+### `migrations.py`
+Versioned schema upgrades plus legacy data clean-ups (e.g., normalising historical code formats). Invoked lazily whenever the database is opened.
+
+### `common.py`
+Shared utilities: logger configuration, data-directory helpers, and constants referenced by multiple modules.
 
 # Docker
 
-Available as a docker image based on `python3.10-buster`
+Available as a docker image based on `python3.10-buster`. Build it locally from your checked-out repository:
 
-## Docker Usage
+```bash
+docker build -t autoshift:local .
+```
+
+## Docker Usage (local image)
 
 ``` bash
 docker run \
@@ -223,17 +247,17 @@ docker run \
   -e SHIFT_ARGS='--redeem bl3:steam,epic bl2:epic --schedule -v' \
   -e TZ='America/Chicago' \
   -v autoshift:/autoshift/data \
-  zacharmstrong/autoshift:latest
+  autoshift:local
 ```
 
-## Docker Compose Usage:
+## Docker Compose Usage (local image)
 
 ``` yaml
 ---
 version: "3.0"
 services:
   autoshift:
-    image: zacharmstrong/autoshift:latest
+    image: autoshift:local
     container_name: autoshift_all
     restart: always
     volumes:
@@ -242,26 +266,16 @@ services:
       - TZ=America/Denver
       - SHIFT_USER=<username>
       - SHIFT_PASS=<password>
-      - SHIFT_ARGS=--redeem bl3:steam,epic bl2:epic --schedule -v
+      - SHIFT_ARGS="--redeem bl3:steam,epic bl2:epic --schedule -v"
+    pull_policy: never
 ```
 
 > **Note:**  
-> When using Docker, set the `SHIFT_ARGS` environment variable to include your `--redeem ...` options.  
-> If you use both `SHIFT_GAMES`/`SHIFT_PLATFORMS` and `--redeem`, the `--redeem` mapping will take precedence and a warning will be printed if legacy options are also present.
+> The Docker image runs `auto.py --user $SHIFT_USER --pass $SHIFT_PASS $SHIFT_ARGS`. Set `SHIFT_USER`/`SHIFT_PASS` (or include credentials inside `SHIFT_ARGS`) and quote the entire `SHIFT_ARGS` string, e.g. `"--redeem bl3:steam --schedule -v"`.
 
-## Kubernetes Usage:
+## Kubernetes Usage (local image)
 
-After setting up the secrets in K8s first: 
-```bash
-kubectl create namespace autoshift
-kubectl config set-context --current --namespace=autoshift
-kubectl create secret generic autoshift-secret --from-literal=username='XXX' --from-literal=password='XXX'
-
-# To get/check the username and password use: 
-kubectl get secret autoshift-secret -o jsonpath="{.data.username}" | base64 -d
-kubectl get secret autoshift-secret -o jsonpath="{.data.password}" | base64 -d
-```
-Then deploy with something similar to: 
+Load the locally built image into your cluster (for example, `kind load docker-image autoshift:local`). Then deploy with something similar to:
 ``` yaml
 --- # deployment
 apiVersion: apps/v1
@@ -283,8 +297,8 @@ spec:
     spec:
       containers:
         - name: autoshift
-          image: zacharmstrong/autoshift:latest
-          imagePullPolicy: IfNotPresent
+          image: autoshift:local
+          imagePullPolicy: Never
           env:
             - name: SHIFT_USER
               valueFrom:
@@ -300,30 +314,19 @@ spec:
               value: "--redeem bl3:steam,epic bl2:epic --schedule 6 -v"
             - name: TZ
               value: "Australia/Sydney"
-          resources:
-            requests:
-              cpu: 100m
-              memory: 500Mi
-            limits:
-              cpu: "100m"
-              memory: "500Mi"
           volumeMounts:
             - mountPath: /autoshift/data
               name: autoshift-pv
       volumes:
         - name: autoshift-pv
-          # If this is NFS backed, you may have to add the nolock mount option to the storage class
           persistentVolumeClaim:
             claimName: autoshift-pvc
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-# If this is NFS backed, you may have to add the nolock mount option to the storage class
 metadata:
   name: autoshift-pvc
-#  namespace: autoshift
 spec:
-  storageClassName: managed-nfs-storage-retain
   accessModes:
     - ReadWriteMany
   resources:
@@ -414,22 +417,33 @@ Example: `xbox` or `xbox ps`
 
 
 #### **SHIFT_ARGS** (optional)
-Additional arguments to pass to the script
+Additional arguments to pass to the script. Combine them as needed; the examples mirror common workflows. Manual single-code runs reject the flags noted earlier.
 
 Default: `--schedule`
 
 Example: `--schedule --golden --limit 30`
 
-|Arg|Description|
-|---|---|
-|`--golden`|Only redeem golden keys|
-|`--non-golden`|Only redeem non-golden keys|
-|`--limit n`|Max number of golden keys you want to redeem|
-|`--schedule`|Keep checking for keys and redeeming every hour (not supported with manual single-code `--redeem`)|
-|`-v`|Verbose mode|
+|Arg|Description|Example|
+|---|---|---|
+|`--redeem target`|Mapping mode (`game:platform[,platform]`) or manual mode (`CODE` or `CODE:platforms`).|`--redeem bl3:steam,epic` · `--redeem J9RT3-...:psn`|
+|`--golden`|Only redeem golden keys.|`--redeem bl3:steam --golden`|
+|`--non-golden`|Redeem non-golden keys (e.g., diamond).|`--redeem bl3:steam --non-golden`|
+|`--other`|Include cosmetics/unknown codes alongside golden/non-golden.|`--redeem bl3:steam --golden --other`|
+|`--games list`|Legacy mode: list of games (mutually exclusive with manual single-code mode).|`--games bl3 bl2`|
+|`--platforms list`|Legacy mode: list of platforms (mutually exclusive with manual single-code mode).|`--platforms steam epic`|
+|`--limit n`|Max golden keys to redeem (defaults to 200).|`--redeem bl3:steam --limit 25`|
+|`--schedule [hours]`|Keep checking every N hours (defaults to 2 if omitted). Not supported with manual single-code `--redeem`.|`--redeem bl3:steam --schedule 6`|
+|`-v`|Verbose logging (shows per-platform summary).|`--redeem bl3:steam -v`|
+|`--dump-csv path`|Dump the database to CSV and exit.|`--dump-csv exports/keys.csv`|
+|`--shift-source source`|Override the SHiFT code JSON (URL/path).|`--shift-source data/shiftcodes.json`|
+|`--profile name`|Use a named profile (separate DB/cookies).|`--profile alt --redeem bl3:steam`|
+|`--user value`|Specify SHiFT username via CLI (or use `SHIFT_USER`).|`--user someone@example.com`|
+|`--pass value`|Specify SHiFT password via CLI (prefer env/secret).|`--pass 's3cret'`|
 
+> ℹ️ When setting `SHIFT_ARGS` in Docker or Kubernetes manifests, wrap the entire value in quotes (e.g., `"--redeem bl3:steam --schedule -v"`).
 
 #### **TZ** (optional)
+
 Your timezone
 
 Default: `America/Chicago`
