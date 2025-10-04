@@ -364,16 +364,18 @@ def main(args):
                 )                # Build categories & prioritised queue (global --limit aware; mode respected)
                 def _is_key_reward(k):
                     try:
-                        return "key" in (k.reward or "").lower()
+                        rv = (getattr(k, "reward", "") or "").lower()
+                        return "key" in rv
                     except Exception:
                         return False
 
                 def _is_golden(k):
-                    return bool(r_golden_keys.match(k.reward or ""))
+                    return bool(r_golden_keys.match((getattr(k, "reward", "") or "")))
 
+                # Category lists (Codes are anything that is not a *key*; Unknowns land here)
                 golden_list        = [k for k in t_keys if _is_golden(k)]
-                nongolden_key_list = [k for k in t_keys if _is_key_reward(k) and not _is_golden(k)]
-                codes_list         = [k for k in t_keys if not _is_key_reward(k)]
+                nongolden_key_list = [k for k in t_keys if _is_key_reward(k) and not _is_golden(k)]  # Diamond, etc.
+                codes_list         = [k for k in t_keys if not _is_key_reward(k)]                     # "Unknown", cosmetics, etc.
 
                 if args.golden:
                     base_queue = golden_list

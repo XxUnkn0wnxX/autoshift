@@ -261,7 +261,7 @@ class Database(ContextManager):
         self.__open_db()
         return self
 
-    def __exit__(self, *_) -> Optional[bool]:
+    def __exit__(self, *_ ) -> Optional[bool]:
         self.close_db()
         return False
 
@@ -489,6 +489,10 @@ def parse_shift_orcicorn():
         print_banner(data)
 
     for code_data in valid_codes:
+        # Normalize reward: treat missing/blank/'Unknown' as "Unknown"
+        rv = (code_data.get("reward") or "").strip()
+        code_data["reward"] = "Unknown" if (rv == "" or rv.lower() == "unknown") else rv
+
         keys: Iterable[Key] = [Key(**code_data)]
 
         # 1. special_key_handler
@@ -533,5 +537,4 @@ def update_keys():
     return keys
 
 
-db = Database()
 db = Database()
