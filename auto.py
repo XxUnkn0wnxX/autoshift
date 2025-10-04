@@ -509,13 +509,12 @@ def main(args):
                 extras = []
 
                 if union_mode:
-                    # Mode ignores: only Codes when --other is NOT set
-                    if not args.other and len(codes_list):
-                        extras.append(
-                            f"ignoring {len(codes_list)} {'Code' if len(codes_list)==1 else 'Codes'} (use --other to include)"
-                        )
-                    # Limit ignores (granular): compute how many of each were capped out
-                    if (lim >= 0):
+                    # Modes: Codes ignored unless --other (always print, even zero)
+                    extras.append(
+                        f"ignoring {len(codes_list)} {'Code' if len(codes_list)==1 else 'Codes'}" if not args.other else f"ignoring 0 Codes"
+                    )
+                    # Limit (granular, always print three parts)
+                    if lim >= 0:
                         g_ign = max(0, len(golden_list) - min(len(golden_list), lim))
                         ng_ign = max(0, len(nongolden_key_list) - max(0, min(len(nongolden_key_list), max(0, lim - min(len(golden_list), lim)))))
                         c_ign = 0
@@ -524,100 +523,63 @@ def main(args):
                             ng_take = min(len(nongolden_key_list), max(0, lim - g_take))
                             c_take  = min(len(codes_list), max(0, lim - g_take - ng_take))
                             c_ign   = max(0, len(codes_list) - c_take)
-
-                        parts = []
-                        if g_ign:
-                            parts.append(f"{g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}")
-                        if ng_ign:
-                            parts.append(f"{ng_ign} {'non-golden Key' if ng_ign==1 else 'non-golden Keys'}")
-                        if c_ign:
-                            parts.append(f"{c_ign} {'Code' if c_ign==1 else 'Codes'}")
-                        if parts:
-                            extras.append("plus " + ", ".join(parts) + " due to --limit")
+                        extras.append(
+                            f"plus {g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}, "
+                            f"{ng_ign} {'non-golden Key' if ng_ign==1 else 'non-golden Keys'}, "
+                            f"{c_ign} {'Code' if c_ign==1 else 'Codes'} due to --limit"
+                        )
 
                 elif args.golden:
-                    # Mode ignores: all non-golden keys (+ codes only if not --other)
+                    # Mode ignores (always show)
                     ng = len(nongolden_key_list)
-                    cd_ignore = 0 if args.other else len(codes_list)
-
-                    if ng or cd_ignore:
-                        if cd_ignore:
-                            extras.append(
-                                f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'}, "
-                                f"{cd_ignore} {'Code' if cd_ignore==1 else 'Codes'} due to --golden"
-                            )
-                        else:
-                            extras.append(
-                                f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --golden"
-                            )
-                    # Limit ignores: additional GOLDEN keys (and possibly Codes) beyond cap
-                    if lim >= 0 and ign_keys:
-                        extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
-                    if lim >= 0 and args.other and ign_codes:
+                    if args.other:
+                        extras.append(
+                            f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --golden"
+                        )
+                    else:
+                        cd_ignore = len(codes_list)
+                        extras.append(
+                            f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'}, "
+                            f"{cd_ignore} {'Code' if cd_ignore==1 else 'Codes'} due to --golden"
+                        )
+                    # Limit ignores (always show lines)
+                    extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
+                    if args.other:
                         extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
-                        extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
 
                 elif args.non_golden:
-                    # Mode ignores: all GOLDEN keys
+                    # Mode ignores (always show)
                     g = len(golden_list)
-                    if g:
-                        extras.append(
-                            f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --non-golden"
-                        )
-                    # If --other is not set, we are also ignoring Codes entirely
+                    extras.append(
+                        f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --non-golden"
+                    )
                     if not args.other:
                         cd = len(codes_list)
-                        if cd:
-                            extras.append(
-                                f"ignoring {cd} {'Code' if cd==1 else 'Codes'} (use --other to include)"
-                            )
-                    # Limit ignores within non-golden domain (non-golden keys + codes)
-                    if (lim >= 0) and (ign_keys or ign_codes):
-                        if ign_keys and ign_codes:
-                            extras.append(
-                                f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'}, "
-                                f"{ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
-                            )
-                        elif ign_keys:
-                            extras.append(
-                                f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'} due to --limit"
-                            )
-                        else:
-                            extras.append(
-                                f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
-                            )
+                        extras.append(
+                            f"ignoring {cd} {'Code' if cd==1 else 'Codes'}"
+                        )
+                    # Limit ignores (always show combined)
+                    extras.append(
+                        f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'}, "
+                        f"{ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
+                    )
 
                 elif other_only:
-                    # Mode ignores: all Keys (Golden and non-golden)
+                    # Mode ignores (always show counts)
                     g  = len(golden_list)
                     ng = len(nongolden_key_list)
-                    if g or ng:
-                        if g and ng:
-                            extras.append(
-                                f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'}, "
-                                f"{ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
-                            )
-                        elif g:
-                            extras.append(
-                                f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --other"
-                            )
-                        else:
-                            extras.append(
-                                f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
-                            )
-                    # Limit ignores: additional Codes beyond cap
-                    if (lim >= 0) and ign_codes:
-                        extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
+                    extras.append(
+                        f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'}, "
+                        f"{ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
+                    )
+                    # Limit ignores (always show)
+                    extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
 
                 else:
-                    # Default: only limit-based ignores
-                    if (lim >= 0) and (ign_keys or ign_codes):
-                        if ign_keys and ign_codes:
-                            extras.append(f"ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit")
-                        elif ign_keys:
-                            extras.append(f"ignoring {ign_keys} {ik_word} due to --limit")
-                        else:
-                            extras.append(f"ignoring {ign_codes} {ic_word} due to --limit")
+                    # Default: always report limit-based ignores (even zero)
+                    extras.append(
+                        f"ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit"
+                    )
 
                 if extras:
                     line += " (" + "; ".join(extras) + ")"
