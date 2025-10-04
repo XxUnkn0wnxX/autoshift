@@ -44,8 +44,9 @@ cd ./autoshift
 python3 -m venv venv
 source ./venv/bin/activate
 pip install -r requirements.txt
-mkdir -p ./data
 ```
+
+> The application creates the `data/` directory (and profile subfolders) automatically on first run, so you usually don't need to make it manually.
 
 ## Usage
 
