@@ -176,37 +176,7 @@ Notes:
 - First run for a profile may take longer because keys are re-processed and the DB is initialized/migrated for that profile.
 - Use profiles when you want isolated state (e.g. different accounts, test vs production, or per-container environments).
 
-Docker / Kubernetes examples
-- Docker (profile via env):
-```sh
-docker run \
-  --restart=always \
-  -e AUTOSHIFT_PROFILE='myprofile' \
-  -e SHIFT_USER='<username>' \
-  -e SHIFT_PASS='<password>' \
-  -e SHIFT_ARGS='--redeem bl3:steam --schedule -v' \
-  -v autoshift:/autoshift/data \
-  zacharmstrong/autoshift:latest
-```
-
-- Docker (profile via SHIFT_ARGS):
-```sh
-docker run \
-  -e SHIFT_USER='<username>' \
-  -e SHIFT_PASS='<password>' \
-  -e SHIFT_ARGS='--profile myprofile --redeem bl3:steam --schedule -v' \
-  -v autoshift:/autoshift/data \
-  zacharmstrong/autoshift:latest
-```
-
-- Kubernetes (set AUTOSHIFT_PROFILE in the manifest):
-```yaml
-env:
-  - name: AUTOSHIFT_PROFILE
-    value: "myprofile"
-  - name: SHIFT_ARGS
-    value: "--redeem bl3:steam --schedule 6 -v"
-```
+Docker / Kubernetes examples live in the [Docker](#docker) section below. Set `AUTOSHIFT_PROFILE` either via dedicated env var or inside `SHIFT_ARGS` (e.g. `--profile myprofile`).
 
 ## Code
 
