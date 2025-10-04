@@ -355,16 +355,10 @@ def main(args):
 
         _L.info("Trying to redeem now.")
 
-        # Global per-item budget for this entire run (0 = unlimited)
-        run_lim = args.limit if getattr(args, "limit", 0) and args.limit > 0 else 0
-
         # now redeem
         for game in all_keys.keys():
             for platform in all_keys[game].keys():
                 _L.info(f"Redeeming for {game} on {platform}")
-                if run_lim == 0:
-                    _L.info("Reached global --limit; stopping.")
-                    return
                 t_keys = list(
                     filter(lambda key: not key.redeemed, all_keys[game][platform])
                 )                # Build categories & prioritised queue (global --limit aware; mode respected)
@@ -394,7 +388,7 @@ def main(args):
                     total_keys  = len(golden_list) + len(nongolden_key_list)
                     total_codes = len(codes_list)
 
-                lim = run_lim  # global remaining items this run (0 = unlimited)
+                lim = args.limit if getattr(args, "limit", 0) and args.limit > 0 else 0  # per game/platform cap (0 = unlimited)
                 if lim <= 0:
                     red_keys = total_keys
                     red_codes = total_codes
@@ -504,10 +498,6 @@ def main(args):
                 queue_codes_len = len(effective_queue) - queue_keys_len
                 k_index = 0
                 c_index = 0
-
-                # consume from global run limit
-                if run_lim > 0:
-                    run_lim = max(0, run_lim - len(effective_queue))
 
                 for num, key in enumerate(redeem_queue):
 
