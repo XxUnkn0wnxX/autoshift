@@ -437,4 +437,3 @@ class ShiftClient:
             else:
                 status = Status.TRYLATER
         return status
-        return status
