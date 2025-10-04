@@ -150,21 +150,12 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
     # Always print info for all requested game/platform pairs
     for g in all_keys:
         for p in all_keys[g]:
-            n_golden = sum(
-                int(cast(Match[str], m).group(1) or 1)
-                for m in filter(
-                    lambda m: m and m.group(1) is not None,
-                    map(
-                        lambda key: query.r_golden_keys.match((key.reward or "")),
-                        all_keys[g][p],
-                    ),
-                )
-            )
-            _L.info(
-                f"You have {n_golden} golden {g.upper()} keys to redeem for {p.upper()}"
-            )
-    return all_keys
+            keys_list   = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
+            total_keys  = sum(1 for k in keys_list if "key" in (k.reward or "").lower())
+            total_codes = len(keys_list) - total_keys
+            _L.info(f"You have {total_keys} keys, {total_codes} Codes for {g} to redeem for {p}")
 
+    return all_keys
 
 def dump_db_to_csv(filename):
     import csv
