@@ -58,8 +58,11 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
     normalized_code, platform_filter = manual_request
     verbose = bool(getattr(args, "verbose", False))
 
-    # DEV NOTE: Manual mode owns --redeem once we get here; log ignored flags pre-emptively so users are aware.
-    _log_ignored_flags(args)
+    try:
+        _ensure_manual_flags_allowed(args)
+    except ManualRedeemUsageError as exc:
+        _L.error(str(exc))
+        sys.exit(2)
 
     # DEV NOTE: Build execution context (code metadata, game/platform lists, schedule flag) in a dedicated helper.
     context = _build_manual_context(
@@ -359,21 +362,33 @@ def _ensure_base_key(code: str, game: str, reward: str) -> Key:
     return Key(**{col: created[col] for col in created.keys()})
 
 
-# DEV NOTE: Logging helpers ----------------------------------------------------
-def _log_ignored_flags(args) -> None:
-    ignored = []
-    for attr in ("games", "platforms", "golden", "non_golden", "other", "limit"):
-        value = getattr(args, attr, None)
-        if value:
-            flag = f"--{attr.replace('_', '-')}"
-            ignored.append(flag)
+# DEV NOTE: Flag validation -----------------------------------------------------
+def _ensure_manual_flags_allowed(args) -> None:
+    disallowed = []
+    if getattr(args, "golden", False):
+        disallowed.append("--golden")
+    if getattr(args, "non_golden", False):
+        disallowed.append("--non-golden")
+    if getattr(args, "other", False):
+        disallowed.append("--other")
+    if getattr(args, "_limit_was_supplied", False):
+        disallowed.append("--limit")
+    if getattr(args, "games", None):
+        disallowed.append("--games")
+    if getattr(args, "platforms", None):
+        disallowed.append("--platforms")
+    if getattr(args, "schedule", None) is not None:
+        disallowed.append("--schedule")
 
-    if ignored:
-        _L.info(
-            "Manual redeem ignores these flags for this run: " + ", ".join(sorted(set(ignored)))
+    if disallowed:
+        raise ManualRedeemUsageError(
+            "Manual --redeem does not support these flags: "
+            + ", ".join(sorted(disallowed))
+            + ". Remove them or use mapping mode."
         )
 
 
+# DEV NOTE: Redeem loop --------------------------------------------------------
 def _summarize_results(
     context: ManualContext,
     results: Sequence[AttemptResult],
