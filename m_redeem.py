@@ -35,6 +35,7 @@ class ManualContext:
     games_to_probe: Sequence[str]
     platforms_to_probe: Sequence[str]
     scheduled: bool
+    platform_filter: Optional[Sequence[str]]
 
 
 # DEV NOTE: Public entry point -------------------------------------------------
@@ -46,23 +47,32 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
     """
 
     try:
-        normalized_code = _extract_manual_code(args)
+        manual_request = _extract_manual_request(args)
     except ManualRedeemUsageError as exc:
         _L.error(str(exc))
         sys.exit(2)
 
-    if not normalized_code:
+    if not manual_request:
         return False
+
+    normalized_code, platform_filter = manual_request
 
     # DEV NOTE: Manual mode owns --redeem once we get here; log ignored flags pre-emptively so users are aware.
     _log_ignored_flags(args)
 
     # DEV NOTE: Build execution context (code metadata, game/platform lists, schedule flag) in a dedicated helper.
-    context = _build_manual_context(normalized_code, bool(getattr(args, "schedule", None)))
+    context = _build_manual_context(
+        normalized_code, bool(getattr(args, "schedule", None)), platform_filter
+    )
 
+    platform_note = (
+        f" (filtered: {', '.join(context.platforms_to_probe)})"
+        if context.platform_filter
+        else ""
+    )
     _L.info(
         f"Manual redeem mode: {context.code} -> game={context.resolved_game or 'manual'}; "
-        f"probing {len(context.games_to_probe)} game(s) across {len(context.platforms_to_probe)} platform(s)."
+        f"probing {len(context.games_to_probe)} game(s) across {len(context.platforms_to_probe)} platform(s){platform_note}."
     )
 
     # DEV NOTE: Kick off the redeem loop and capture per-attempt statuses for summary + exit decisions.
@@ -84,45 +94,44 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
 
 
 # DEV NOTE: Detection & normalization helpers ----------------------------------
-def _extract_manual_code(args) -> Optional[str]:
-    """Return normalized SHiFT code string if manual mode applies, otherwise None."""
+def _extract_manual_request(args) -> Optional[tuple[str, Optional[Sequence[str]]]]:
+    """Return (normalized_code, platform_filter) for manual mode, otherwise None."""
 
     entries = [entry.strip() for entry in (getattr(args, "redeem", None) or []) if entry and entry.strip()]
     if not entries:
         return None
 
-    colon_entries = [entry for entry in entries if ":" in entry]
-    bare_entries = [entry for entry in entries if ":" not in entry]
+    # Manual mode only triggers when exactly one entry looks like a SHiFT code.
+    if len(entries) != 1:
+        manual_like = [entry for entry in entries if _looks_like_shift_code(entry.split(":", 1)[0])]
+        if manual_like:
+            raise ManualRedeemUsageError("Manual --redeem expects exactly one SHiFT code argument.")
+        return None
 
-    # DEV NOTE: Catch mixed formats up-front so users are nudged toward one clear mode.
-    if bare_entries and colon_entries:
-        raise ManualRedeemUsageError(
-            "Cannot mix manual SHiFT codes with game:platform entries in --redeem."
-        )
-
-    # DEV NOTE: A single colon entry may still be a manual attempt (e.g. CODE:psn). Detect and error explicitly.
-    if len(entries) == 1 and colon_entries:
-        candidate, _ = entries[0].split(":", 1)
-        if _looks_like_shift_code(candidate):
+    entry = entries[0]
+    if ":" in entry:
+        code_part, platform_part = entry.split(":", 1)
+        if not _looks_like_shift_code(code_part):
+            # Probably mapping mode (game:platform); let the caller continue normally.
+            return None
+        normalized = _normalize_shift_code(code_part)
+        if not normalized:
             raise ManualRedeemUsageError(
-                "Manual --redeem takes a raw SHiFT code only; drop any :platform suffixes."
+                "Manual --redeem requires a 25-character SHiFT code (5 blocks of 5 letters/numbers)."
             )
+        platform_filter = _normalize_manual_platforms(platform_part)
+        return normalized, platform_filter
+
+    if not _looks_like_shift_code(entry):
         return None
 
-    if colon_entries:
-        # DEV NOTE: All entries look like mapping mode; manual mode not applicable.
-        return None
-
-    if len(bare_entries) != 1:
-        raise ManualRedeemUsageError("Manual --redeem expects exactly one SHiFT code argument.")
-
-    normalized = _normalize_shift_code(bare_entries[0])
+    normalized = _normalize_shift_code(entry)
     if not normalized:
         raise ManualRedeemUsageError(
             "Manual --redeem requires a 25-character SHiFT code (5 blocks of 5 letters/numbers)."
         )
 
-    return normalized
+    return normalized, None
 
 
 def _looks_like_shift_code(raw: str) -> bool:
@@ -143,11 +152,46 @@ def _normalize_shift_code(raw: str) -> Optional[str]:
     return "-".join(blocks)
 
 
+def _normalize_manual_platforms(raw: str) -> Sequence[str]:
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if not tokens:
+        raise ManualRedeemUsageError("Manual --redeem with :platform requires at least one platform.")
+
+    normalized: list[str] = []
+    for token in tokens:
+        plat = _normalize_platform_token(token)
+        if plat == "universal":
+            raise ManualRedeemUsageError("Manual --redeem does not support the 'universal' pseudo-platform.")
+        if plat not in normalized:
+            normalized.append(plat)
+    return normalized
+
+
+def _normalize_platform_token(token: str) -> str:
+    token_lower = token.strip().lower()
+    if token_lower in query.known_platforms:
+        return token_lower
+    inverted = getattr(query.known_platforms, "inv", {})
+    if token_lower in inverted:
+        return inverted[token_lower]
+    raise ManualRedeemUsageError(f"Unknown platform '{token}' for manual --redeem.")
+
+
 # DEV NOTE: Context construction ------------------------------------------------
-def _build_manual_context(code: str, scheduled: bool) -> ManualContext:
+def _build_manual_context(
+    code: str,
+    scheduled: bool,
+    platform_filter: Optional[Sequence[str]],
+) -> ManualContext:
     reward, resolved_game = _resolve_code_metadata(code)
     games_to_probe = _determine_games_to_probe(resolved_game)
-    platforms_to_probe = [plat for plat in query.known_platforms.keys() if plat != "universal"]
+
+    if platform_filter:
+        platforms_to_probe = [plat for plat in platform_filter if plat != "universal"]
+        if not platforms_to_probe:
+            raise ManualRedeemUsageError("Manual --redeem platform list cannot be empty after normalization.")
+    else:
+        platforms_to_probe = [plat for plat in query.known_platforms.keys() if plat != "universal"]
 
     return ManualContext(
         code=code,
@@ -156,6 +200,7 @@ def _build_manual_context(code: str, scheduled: bool) -> ManualContext:
         games_to_probe=games_to_probe,
         platforms_to_probe=platforms_to_probe,
         scheduled=scheduled,
+        platform_filter=platform_filter,
     )
 
 
@@ -343,16 +388,17 @@ def _summarize_results(
         status_name = attempt.status.name if isinstance(attempt.status, Status) else str(attempt.status)
         _L.info(f"  {attempt.game} on {attempt.platform}: {status_name}")
 
-    success_count = sum(1 for result in results if result.status == Status.SUCCESS)
-    redeemed_count = sum(1 for result in results if result.status == Status.REDEEMED)
+    success_targets = [result.platform for result in results if result.status == Status.SUCCESS]
+    redeemed_targets = [result.platform for result in results if result.status == Status.REDEEMED]
 
-    if success_count or redeemed_count:
-        parts = []
-        if success_count:
-            parts.append(f"{success_count} success{'es' if success_count != 1 else ''}")
-        if redeemed_count:
-            parts.append(f"{redeemed_count} already redeemed")
-        outcome_label = ", ".join(parts)
+    labels = []
+    if success_targets:
+        labels.append(f"{', '.join(success_targets)} success{'es' if len(success_targets) != 1 else ''}")
+    if redeemed_targets:
+        labels.append(f"{', '.join(redeemed_targets)} already redeemed")
+
+    if labels:
+        outcome_label = ", ".join(labels)
     else:
         outcome_label = "no successes"
 

@@ -266,7 +266,7 @@ def setup_argparser():
         help=textwrap.dedent("""\
             Specify redemption targets.
             Mapping mode: bl3:steam,epic bl2:epic
-            Manual mode: pass a single SHiFT code (no :platform suffix).
+            Manual mode: SHiFT code or code:platform[,platform...] to filter targets.
         """),
     )
     parser.add_argument(
