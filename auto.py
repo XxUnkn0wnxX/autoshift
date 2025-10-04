@@ -518,43 +518,53 @@ def main(args):
                 else:
                     line = f"About to redeem {red_codes} {rc_label} for {game} on {platform}"
 
-                # ---- Simple ignore summary (no reasons; just counts) ----
-                # Determine which categories are included by mode/flags
-                if union_mode:
-                    inc_g, inc_ng, inc_c = True, True, bool(args.other)
-                elif other_only:
-                    inc_g, inc_ng, inc_c = False, False, True
-                elif args.golden:
-                    inc_g, inc_ng, inc_c = True, False, bool(args.other)
-                elif args.non_golden:
-                    inc_g, inc_ng, inc_c = False, True, bool(args.other)
-                else:
-                    inc_g, inc_ng, inc_c = True, True, True
+                # ---- Rebuilt header ignore summary (simple & mode-specific) ----
+                explicit_limit = ("--limit" in sys.argv)
 
                 g_total  = len(golden_list)
                 ng_total = len(nongolden_key_list)
                 c_total  = len(codes_list)
 
-                # If user explicitly passed --limit, report ignores due to limit among included categories.
-                # Otherwise, report ignores due to mode (categories not included).
-                if "--limit" in sys.argv:
-                    g_ignored  = max(0, (g_total  if inc_g else 0) - g_take)
-                    ng_ignored = max(0, (ng_total if inc_ng else 0) - ng_take)
-                    c_ignored  = max(0, (c_total  if inc_c else 0) - c_take)
-                    line += (
-                        f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'}, "
-                        f"{ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'}, "
-                        f"{c_ignored} {'Code' if c_ignored==1 else 'Codes'} due to limit)"
-                    )
+                if explicit_limit:
+                    # Show ignores only for the active category; default shows all three
+                    if args.golden:
+                        g_ignored = max(0, g_total - g_take)
+                        line += f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'} due to limit)"
+                    elif args.non_golden:
+                        ng_ignored = max(0, ng_total - ng_take)
+                        line += f" (Ignoring {ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'} due to limit)"
+                    elif args.other:
+                        c_ignored = max(0, c_total - c_take)
+                        line += f" (Ignoring {c_ignored} {'Code' if c_ignored==1 else 'Codes'} due to limit)"
+                    else:
+                        # No mode flags → all categories considered
+                        g_ignored  = max(0, g_total  - g_take)
+                        ng_ignored = max(0, ng_total - ng_take)
+                        c_ignored  = max(0, c_total  - c_take)
+                        line += (
+                            f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'}, "
+                            f"{ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'}, "
+                            f"{c_ignored} {'Code' if c_ignored==1 else 'Codes'} due to limit)"
+                        )
                 else:
-                    g_ignored  = g_total  if not inc_g else 0
-                    ng_ignored = ng_total if not inc_ng else 0
-                    c_ignored  = c_total  if not inc_c else 0
-                    line += (
-                        f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'}, "
-                        f"{ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'}, "
-                        f"{c_ignored} {'Code' if c_ignored==1 else 'Codes'})"
-                    )
+                    # No explicit --limit → report categories excluded by mode
+                    if args.golden:
+                        line += (
+                            f" (Ignoring {ng_total} {'Non-Golden Key' if ng_total==1 else 'Non-Golden Keys'}, "
+                            f"{c_total} {'Code' if c_total==1 else 'Codes'})"
+                        )
+                    elif args.non_golden:
+                        line += (
+                            f" (Ignoring {g_total} {'Golden Key' if g_total==1 else 'Golden Keys'}, "
+                            f"{c_total} {'Code' if c_total==1 else 'Codes'})"
+                        )
+                    elif args.other:
+                        line += (
+                            f" (Ignoring {g_total} {'Golden Key' if g_total==1 else 'Golden Keys'}, "
+                            f"{ng_total} {'Non-Golden Key' if ng_total==1 else 'Non-Golden Keys'})"
+                        )
+                    else:
+                        line += " (Ignoring 0 Golden Keys, 0 Non-Golden Keys, 0 Codes)"
 
                 _L.info(line)
 
@@ -647,6 +657,12 @@ if __name__ == "__main__":
     # build argument parser
     parser = setup_argparser()
     args = parser.parse_args()
+
+    # Enforce mutual exclusivity for mode flags: choose only one, or none for all
+    mode_count = int(bool(getattr(args, 'golden', False))) + int(bool(getattr(args, 'non_golden', False))) + int(bool(getattr(args, 'other', False)))
+    if mode_count > 1:
+        _L.error("Please choose only one of --golden, --non-golden, or --other. For all types, omit these flags.")
+        sys.exit(2)
 
     args.pw = getattr(args, "pass")
 
