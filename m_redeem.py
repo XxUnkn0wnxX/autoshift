@@ -56,6 +56,7 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
         return False
 
     normalized_code, platform_filter = manual_request
+    verbose = bool(getattr(args, "verbose", False))
 
     # DEV NOTE: Manual mode owns --redeem once we get here; log ignored flags pre-emptively so users are aware.
     _log_ignored_flags(args)
@@ -81,7 +82,7 @@ def maybe_handle_manual_redeem(args, shift_client, redeem_cb) -> bool:
     any_success = any(_is_positive_status(result.status) for result in results)
     hit_try_later = any(result.status == Status.TRYLATER for result in results)
 
-    _summarize_results(context, results, any_success, hit_try_later)
+    _summarize_results(context, results, any_success, hit_try_later, verbose)
 
     if context.scheduled:
         # DEV NOTE: Scheduler callers must retain control; we therefore never sys.exit() on scheduled runs.
@@ -378,22 +379,25 @@ def _summarize_results(
     results: Sequence[AttemptResult],
     any_success: bool,
     hit_try_later: bool,
+    verbose: bool,
 ) -> None:
     if not results:
         _L.warning("Manual redeem skipped all attempts (likely due to TRY LATER).")
         return
 
-    _L.info("Manual redeem summary:")
-    for attempt in results:
-        status_name = attempt.status.name if isinstance(attempt.status, Status) else str(attempt.status)
-        _L.info(f"  {attempt.game} on {attempt.platform}: {status_name}")
+    if verbose:
+        _L.info("Manual redeem summary:")
+        for attempt in results:
+            status_name = attempt.status.name if isinstance(attempt.status, Status) else str(attempt.status)
+            _L.info(f"  {attempt.game} on {attempt.platform}: {status_name}")
 
     success_targets = [result.platform for result in results if result.status == Status.SUCCESS]
     redeemed_targets = [result.platform for result in results if result.status == Status.REDEEMED]
 
-    labels = []
+    labels: list[str] = []
     if success_targets:
-        labels.append(f"{', '.join(success_targets)} success{'es' if len(success_targets) != 1 else ''}")
+        label = "success" if len(success_targets) == 1 else "successes"
+        labels.append(f"{', '.join(success_targets)} {label}")
     if redeemed_targets:
         labels.append(f"{', '.join(redeemed_targets)} already redeemed")
 

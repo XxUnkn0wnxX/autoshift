@@ -72,9 +72,14 @@ def redeem(key: "Key"):
     # notify user
     try:
         # this may fail if there are other `{<something>}` in the string..
-        _L.info("  " + status.msg.format(**locals()))
+        msg = status.msg.format(**locals())
     except Exception:
-        _L.info("  " + status.msg)
+        msg = status.msg
+
+    if status == Status.INVALID:
+        msg = f"Cannot redeem on {key.platform}"
+
+    _L.info("  " + msg)
 
     return status == Status.SUCCESS
 
