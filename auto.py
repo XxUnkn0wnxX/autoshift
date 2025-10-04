@@ -22,7 +22,8 @@
 #############################################################################
 from __future__ import print_function, annotations
 
-import os, sys  # must run before importing common/query
+import os  # must run before importing common/query
+import sys  # must run before importing common/query
 
 # Early profile bootstrap: set AUTOSHIFT_PROFILE before common.py is imported
 if "--profile" in sys.argv:
@@ -30,8 +31,9 @@ if "--profile" in sys.argv:
     if i + 1 < len(sys.argv):
         os.environ["AUTOSHIFT_PROFILE"] = sys.argv[i + 1]
 
-from common import _L, DEBUG, DIRNAME, INFO, data_path, DATA_DIR
-from typing import Match, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING
+
+from common import _L, DEBUG, INFO, data_path, DATA_DIR
 
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
@@ -53,10 +55,9 @@ under certain conditions; see LICENSE for details.
 
 
 def redeem(key: "Key"):
+    """Redeem key and set as redeemed if successful"""
     import query
     from shift import Status
-
-    """Redeem key and set as redeemed if successfull"""
 
     _L.info(f"Trying to redeem {key.reward} ({key.code}) on {key.platform}")
     # use query.known_games (query imported above) instead of relying on a global name
@@ -71,7 +72,7 @@ def redeem(key: "Key"):
     try:
         # this may fail if there are other `{<something>}` in the string..
         _L.info("  " + status.msg.format(**locals()))
-    except:
+    except Exception:
         _L.info("  " + status.msg)
 
     return status == Status.SUCCESS
@@ -169,9 +170,7 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
 
 def dump_db_to_csv(filename):
     import csv
-    import os
-    import sqlite3
-    from query import db, Key
+    from query import db
 
     # Always write into the profile-aware data directory
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -191,7 +190,10 @@ def dump_db_to_csv(filename):
             writer = csv.writer(f)
             writer.writerow(headers)
             for row in rows:
-                writer.writerow([row[h] for h in headers])
+                try:
+                    writer.writerow([row[h] for h in headers])  # sqlite3.Row path
+                except Exception:
+                    writer.writerow(list(row))  # tuple fallback
         _L.info(f"Dumped {len(rows)} rows to {out_path}")
 
 
@@ -264,11 +266,11 @@ def setup_argparser():
     parser.add_argument(
         "--limit",
         type=int,
-        default=200,
+        default=None,
         help=textwrap.dedent(
             """\
                         Max number of golden Keys you want to redeem.
-                        (default 200)
+                        (default 200 if not supplied)
                         NOTE: You can only have 255 keys at any given time!"""
         ),
     )  # noqa
@@ -277,7 +279,7 @@ def setup_argparser():
         type=float,
         const=2,
         nargs="?",
-        help="Keep checking for keys and redeeming every hour",
+        help="Keep checking for keys every N hours (min 2). If used without a value, defaults to 2.",
     )
     parser.add_argument("-v", dest="verbose", action="store_true", help="Verbose mode")
     parser.add_argument(
@@ -309,7 +311,7 @@ def main(args):
 
     # Now import modules that rely on data paths / migrations
     import query
-    from query import db, r_golden_keys, known_games, known_platforms, Key
+    from query import db, r_golden_keys, known_games, known_platforms
     from shift import ShiftClient, Status
 
     # apply shift source override (CLI takes precedence over env)
@@ -331,15 +333,15 @@ def main(args):
             _L.info(f"  {game}: {', '.join(plats)}")
     else:
         # Legacy mode
-        games = args.games
-        platforms = args.platforms
+        games = args.games or list(known_games.keys())
+        platforms = args.platforms or list(known_platforms)
         _L.warning(
             "You are using the legacy --games/--platforms format. "
-            "In the future, use --redeem bl3:steam,epic bl2:epic for more control."
+            "Prefer --redeem bl3:steam,epic bl2:epic for more control."
         )
         _L.info("Redeeming all of these games/platforms combinations:")
-        _L.info(f"  Games: {', '.join(games) if games else '(none)'}")
-        _L.info(f"  Platforms: {', '.join(platforms) if platforms else '(none)'}")
+        _L.info(f"  Games: {', '.join(games)}")
+        _L.info(f"  Platforms: {', '.join(platforms)}")
 
     with db:
         if not client:
@@ -375,6 +377,9 @@ def main(args):
             # DEV NOTE: This replaces the older, misleading 'Using password from:'
             # because cookies imply no password may be used.
             _L.debug(f"Using auth from: {pw_source}")
+            if args.schedule and (not has_cookies) and (not chosen_pw):
+                _L.error("Scheduled mode requires saved cookies or a password (env/CLI). Exiting.")
+                sys.exit(2)
             client = ShiftClient(args.user, chosen_pw)
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
@@ -559,7 +564,7 @@ def main(args):
                 # DEV NOTE: We removed verbose 'why' justifications.
                 #          If --limit is explicitly present in argv, we show 'due to limit' ignores.
                 #          Without --limit, we show which categories are excluded by the selected mode. (simple & mode-specific) ----
-                explicit_limit = ("--limit" in sys.argv)
+                explicit_limit = getattr(args, "_limit_was_supplied", False)
 
                 g_total  = len(golden_list)
                 ng_total = len(nongolden_key_list)
@@ -624,9 +629,6 @@ def main(args):
                         else:
                             _L.info("Trying to prevent a 'too many requests'-block.")
                         sleep(60)
-
-                    # Decide golden/non-golden for this item
-                    m = r_golden_keys.match(key.reward or "")
 
                     # Skip items that won't be attempted in this mode (belt-and-braces)
                     if union_mode:
@@ -721,7 +723,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    import os
 
     # only print license text on first use (profile-aware path)
     if not os.path.exists(data_path(".cookies.save")):
@@ -730,6 +731,11 @@ if __name__ == "__main__":
     # build argument parser
     parser = setup_argparser()
     args = parser.parse_args()
+    # Track whether the user explicitly supplied --limit
+    limit_was_supplied = (args.limit is not None)
+    if args.limit is None:
+        args.limit = 200
+    setattr(args, "_limit_was_supplied", limit_was_supplied)
 
     # DEV NOTE: Enforce mutual exclusivity for mode flags per product spec.
     # If users want all categories, they should omit --golden/--non-golden/--other.
@@ -751,7 +757,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if args.schedule and args.schedule < 2: # DEV NOTE (Scheduling): Enforce minimum cadence of 2 hours to avoid platform blocks and to match log text.
-        _L.warn(
+        _L.warning(
             f"Running this tool every {args.schedule} hours would result in "
             "too many requests.\n"
             "Scheduling changed to run every 2 hours!"
@@ -778,7 +784,10 @@ if __name__ == "__main__":
         # Optionally add coalescing/misfire_grace_time if the process may sleep:
         # scheduler.add_job(main, "interval", args=(args,), minutes=total_minutes, coalesce=True, misfire_grace_time=300)
 
-        scheduler.add_job(main, "interval", args=(args,), minutes=total_minutes)
+        scheduler.add_job(
+            main, "interval", args=(args,), minutes=total_minutes,
+            coalesce=True, max_instances=1, misfire_grace_time=300
+        )
         print(f"Press Ctrl+{'Break' if os.name == 'nt' else 'C'} to exit")
 
         try:
