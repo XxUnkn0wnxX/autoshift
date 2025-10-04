@@ -34,6 +34,7 @@ if "--profile" in sys.argv:
 from typing import TYPE_CHECKING
 
 from common import _L, DEBUG, INFO, data_path, DATA_DIR
+from m_redeem import maybe_handle_manual_redeem
 
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
@@ -257,11 +258,16 @@ def setup_argparser():
         nargs="+",
         help=("Platforms you want to query SHiFT keys for"),
     )
+    # DEV NOTE: Document both mapping and manual flows inline so --help stays truthful.
     parser.add_argument(
         "--redeem",
         type=str,
         nargs="+",
-        help="Specify which platforms to redeem which games for. Format: bl3:steam,epic bl2:epic",
+        help=textwrap.dedent("""\
+            Specify redemption targets.
+            Mapping mode: bl3:steam,epic bl2:epic
+            Manual mode: pass a single SHiFT code (no :platform suffix).
+        """),
     )
     parser.add_argument(
         "--limit",
@@ -323,26 +329,6 @@ def main(args):
     if shift_src:
         query.set_shift_source(shift_src)
 
-    redeem_mapping = parse_redeem_mapping(args)
-    if redeem_mapping:
-        # New mapping mode
-        games = list(redeem_mapping.keys())
-        platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
-        _L.info("Redeem mapping (game: platforms):")
-        for game, plats in redeem_mapping.items():
-            _L.info(f"  {game}: {', '.join(plats)}")
-    else:
-        # Legacy mode
-        games = args.games or list(known_games.keys())
-        platforms = args.platforms or list(known_platforms)
-        _L.warning(
-            "You are using the legacy --games/--platforms format. "
-            "Prefer --redeem bl3:steam,epic bl2:epic for more control."
-        )
-        _L.info("Redeeming all of these games/platforms combinations:")
-        _L.info(f"  Games: {', '.join(games)}")
-        _L.info(f"  Platforms: {', '.join(platforms)}")
-
     with db:
         if not client:
             # DEV NOTE: Password/credential source detection & debug logging
@@ -381,6 +367,30 @@ def main(args):
                 _L.error("Scheduled mode requires saved cookies or a password (env/CLI). Exiting.")
                 sys.exit(2)
             client = ShiftClient(args.user, chosen_pw)
+
+        # DEV NOTE: Manual mode hook runs before mapping logic so parse_redeem_mapping never mis-parses SHiFT codes.
+        if maybe_handle_manual_redeem(args, client, redeem):
+            return
+
+        redeem_mapping = parse_redeem_mapping(args)
+        if redeem_mapping:
+            # New mapping mode
+            games = list(redeem_mapping.keys())
+            platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
+            _L.info("Redeem mapping (game: platforms):")
+            for game, plats in redeem_mapping.items():
+                _L.info(f"  {game}: {', '.join(plats)}")
+        else:
+            # Legacy mode
+            games = args.games or list(known_games.keys())
+            platforms = args.platforms or list(known_platforms)
+            _L.warning(
+                "You are using the legacy --games/--platforms format. "
+                "Prefer --redeem bl3:steam,epic bl2:epic for more control."
+            )
+            _L.info("Redeeming all of these games/platforms combinations:")
+            _L.info(f"  Games: {', '.join(games)}")
+            _L.info(f"  Platforms: {', '.join(platforms)}")
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
 
