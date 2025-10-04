@@ -389,6 +389,11 @@ def main(args):
                 # ---- per-pair limit and base queue (mode-aware + --other) ----
                 lim = args.limit
 
+                # per-category take counters for limit math
+                g_take = 0
+                ng_take = 0
+                c_take = 0
+
                 union_mode = bool(args.golden and args.non_golden)
                 other_only = bool(args.other and not args.golden and not args.non_golden)
 
@@ -513,84 +518,43 @@ def main(args):
                 else:
                     line = f"About to redeem {red_codes} {rc_label} for {game} on {platform}"
 
-                # ---- Compose ignore reasons (mode first, then limit) ----
-                extras = []
-
+                # ---- Simple ignore summary (no reasons; just counts) ----
+                # Determine which categories are included by mode/flags
                 if union_mode:
-                    # Modes: Codes ignored unless --other (always print, even zero)
-                    extras.append(
-                        f"ignoring {len(codes_list)} {'Code' if len(codes_list)==1 else 'Codes'}" if not args.other else f"ignoring 0 Codes"
-                    )
-                    # Limit (granular, always print three parts)
-                    if lim >= 0:
-                        g_ign = max(0, len(golden_list) - min(len(golden_list), lim))
-                        ng_ign = max(0, len(nongolden_key_list) - max(0, min(len(nongolden_key_list), max(0, lim - min(len(golden_list), lim)))))
-                        c_ign = 0
-                        if args.other:
-                            g_take  = min(len(golden_list), lim)
-                            ng_take = min(len(nongolden_key_list), max(0, lim - g_take))
-                            c_take  = min(len(codes_list), max(0, lim - g_take - ng_take))
-                            c_ign   = max(0, len(codes_list) - c_take)
-                        extras.append(
-                            f"plus {g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}, "
-                            f"{ng_ign} {'Non-Golden Key' if ng_ign==1 else 'Non-Golden Keys'}, "
-                            f"{c_ign} {'Code' if c_ign==1 else 'Codes'} due to --limit"
-                        )
-
-                elif args.golden:
-                    # Mode ignores (always show)
-                    ng = len(nongolden_key_list)
-                    if args.other:
-                        extras.append(
-                            f"ignoring {ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'} due to --golden"
-                        )
-                    else:
-                        cd_ignore = len(codes_list)
-                        extras.append(
-                            f"ignoring {ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'}, "
-                            f"{cd_ignore} {'Code' if cd_ignore==1 else 'Codes'} due to --golden"
-                        )
-                    # Limit ignores (always show lines)
-                    extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
-                    if args.other:
-                        extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
-
-                elif args.non_golden:
-                    # Mode ignores (always show)
-                    g = len(golden_list)
-                    extras.append(
-                        f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --non-golden"
-                    )
-                    if not args.other:
-                        cd = len(codes_list)
-                        extras.append(
-                            f"ignoring {cd} {'Code' if cd==1 else 'Codes'}"
-                        )
-                    # Limit ignores (always show combined)
-                    extras.append(
-                        f"plus {ign_keys} {'Non-Golden Key' if ign_keys==1 else 'Non-Golden Keys'}, "
-                        f"{ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
-                    )
-
+                    inc_g, inc_ng, inc_c = True, True, bool(args.other)
                 elif other_only:
-                    # Mode ignores (always show counts)
-                    g  = len(golden_list)
-                    ng = len(nongolden_key_list)
-                    extras.append(
-                        f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'}, "
-                        f"{ng} {'Non-Golden Key' if ng==1 else 'Non-Golden Keys'} due to --other"
-                    )
-                    # Limit ignores (always show)
-                    extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
-
+                    inc_g, inc_ng, inc_c = False, False, True
+                elif args.golden:
+                    inc_g, inc_ng, inc_c = True, False, bool(args.other)
+                elif args.non_golden:
+                    inc_g, inc_ng, inc_c = False, True, bool(args.other)
                 else:
-                    # Default: always report limit-based ignores (even zero)
-                    extras.append(
-                        f"ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit"
-                    )
+                    inc_g, inc_ng, inc_c = True, True, True
 
-                if extras:
-                    line += " (" + "; ".join(extras) + ")"
+                g_total  = len(golden_list)
+                ng_total = len(nongolden_key_list)
+                c_total  = len(codes_list)
+
+                # If user explicitly passed --limit, report ignores due to limit among included categories.
+                # Otherwise, report ignores due to mode (categories not included).
+                if "--limit" in sys.argv:
+                    g_ignored  = max(0, (g_total  if inc_g else 0) - g_take)
+                    ng_ignored = max(0, (ng_total if inc_ng else 0) - ng_take)
+                    c_ignored  = max(0, (c_total  if inc_c else 0) - c_take)
+                    line += (
+                        f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'}, "
+                        f"{ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'}, "
+                        f"{c_ignored} {'Code' if c_ignored==1 else 'Codes'} due to limit)"
+                    )
+                else:
+                    g_ignored  = g_total  if not inc_g else 0
+                    ng_ignored = ng_total if not inc_ng else 0
+                    c_ignored  = c_total  if not inc_c else 0
+                    line += (
+                        f" (Ignoring {g_ignored} {'Golden Key' if g_ignored==1 else 'Golden Keys'}, "
+                        f"{ng_ignored} {'Non-Golden Key' if ng_ignored==1 else 'Non-Golden Keys'}, "
+                        f"{c_ignored} {'Code' if c_ignored==1 else 'Codes'})"
+                    )
 
                 _L.info(line)
 
