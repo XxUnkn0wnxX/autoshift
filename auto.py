@@ -353,11 +353,7 @@ def main(args):
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
 
-        # redeem 0 golden keys but only golden??... duh
-        if not args.limit and args.golden:
-            _L.info("Not redeeming anything ...")
-            return
-
+        
         _L.info("Trying to redeem now.")
 
         # now redeem
@@ -383,7 +379,7 @@ def main(args):
                 codes_list         = [k for k in t_keys if not _is_key_reward(k)]                     # "Unknown", cosmetics, etc.
 
                 # ---- per-pair limit and base queue (mode-aware + --other) ----
-                lim = args.limit if getattr(args, "limit", 0) and args.limit > 0 else 0
+                lim = args.limit
 
                 union_mode = bool(args.golden and args.non_golden)
                 other_only = bool(args.other and not args.golden and not args.non_golden)
@@ -407,7 +403,7 @@ def main(args):
                     total_codes = len(codes_list) if args.other else 0
 
                 elif args.non_golden:
-                    # Codes only included if --other is set
+                    # non-golden Keys; Codes only if --other
                     base_queue = nongolden_key_list + (codes_list if args.other else [])
                     total_keys  = len(nongolden_key_list)
                     total_codes = len(codes_list) if args.other else 0
@@ -419,7 +415,12 @@ def main(args):
                     total_codes = len(codes_list)
 
                 # ---- Apply per-pair limit ----
-                if lim > 0:
+                if lim == 0:
+                    # Explicit zero means redeem nothing; still report ignores
+                    redeem_queue = []
+                    red_keys  = 0
+                    red_codes = 0
+                elif lim > 0:
                     if union_mode:
                         # Golden → non-golden → Codes(if --other)
                         g_take  = min(len(golden_list), lim)
@@ -471,6 +472,7 @@ def main(args):
                         red_codes = c_take
                         redeem_queue = golden_list[:g_take] + nongolden_key_list[:ng_take] + codes_list[:c_take]
                 else:
+                    # (lim < 0) shouldn't happen; treat as unlimited
                     redeem_queue = base_queue
                     red_keys  = total_keys
                     red_codes = total_codes
@@ -513,9 +515,9 @@ def main(args):
                             f"ignoring {len(codes_list)} {'Code' if len(codes_list)==1 else 'Codes'} (use --other to include)"
                         )
                     # Limit ignores (granular): compute how many of each were capped out
-                    if (lim > 0):
+                    if (lim >= 0):
                         g_ign = max(0, len(golden_list) - min(len(golden_list), lim))
-                        ng_cap = max(0, len(nongolden_key_list) - max(0, min(len(nongolden_key_list), max(0, lim - min(len(golden_list), lim)))))
+                        ng_ign = max(0, len(nongolden_key_list) - max(0, min(len(nongolden_key_list), max(0, lim - min(len(golden_list), lim)))))
                         c_ign = 0
                         if args.other:
                             g_take  = min(len(golden_list), lim)
@@ -526,7 +528,7 @@ def main(args):
                         parts = []
                         if g_ign:
                             parts.append(f"{g_ign} {'Golden Key' if g_ign==1 else 'Golden Keys'}")
-                        if ng_ign := ng_cap:
+                        if ng_ign:
                             parts.append(f"{ng_ign} {'non-golden Key' if ng_ign==1 else 'non-golden Keys'}")
                         if c_ign:
                             parts.append(f"{c_ign} {'Code' if c_ign==1 else 'Codes'}")
@@ -548,8 +550,11 @@ def main(args):
                             extras.append(
                                 f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --golden"
                             )
-                    # Limit ignores: additional GOLDEN keys beyond cap
-                    if (lim > 0) and ign_keys:
+                    # Limit ignores: additional GOLDEN keys (and possibly Codes) beyond cap
+                    if lim >= 0 and ign_keys:
+                        extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
+                    if lim >= 0 and args.other and ign_codes:
+                        extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
                         extras.append(f"plus {ign_keys} {'Golden Key' if ign_keys==1 else 'Golden Keys'} due to --limit")
 
                 elif args.non_golden:
@@ -567,7 +572,7 @@ def main(args):
                                 f"ignoring {cd} {'Code' if cd==1 else 'Codes'} (use --other to include)"
                             )
                     # Limit ignores within non-golden domain (non-golden keys + codes)
-                    if (lim > 0) and (ign_keys or ign_codes):
+                    if (lim >= 0) and (ign_keys or ign_codes):
                         if ign_keys and ign_codes:
                             extras.append(
                                 f"plus {ign_keys} {'non-golden Key' if ign_keys==1 else 'non-golden Keys'}, "
@@ -582,9 +587,31 @@ def main(args):
                                 f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit"
                             )
 
+                elif other_only:
+                    # Mode ignores: all Keys (Golden and non-golden)
+                    g  = len(golden_list)
+                    ng = len(nongolden_key_list)
+                    if g or ng:
+                        if g and ng:
+                            extras.append(
+                                f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'}, "
+                                f"{ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
+                            )
+                        elif g:
+                            extras.append(
+                                f"ignoring {g} {'Golden Key' if g==1 else 'Golden Keys'} due to --other"
+                            )
+                        else:
+                            extras.append(
+                                f"ignoring {ng} {'non-golden Key' if ng==1 else 'non-golden Keys'} due to --other"
+                            )
+                    # Limit ignores: additional Codes beyond cap
+                    if (lim >= 0) and ign_codes:
+                        extras.append(f"plus {ign_codes} {'Code' if ign_codes==1 else 'Codes'} due to --limit")
+
                 else:
                     # Default: only limit-based ignores
-                    if (lim > 0) and (ign_keys or ign_codes):
+                    if (lim >= 0) and (ign_keys or ign_codes):
                         if ign_keys and ign_codes:
                             extras.append(f"ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit")
                         elif ign_keys:
