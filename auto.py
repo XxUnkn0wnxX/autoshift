@@ -361,8 +361,11 @@ def main(args):
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
 
-        
         _L.info("Trying to redeem now.")
+
+        # Track what actually got redeemed across the whole run
+        any_keys_redeemed = False
+        any_codes_redeemed = False
 
         # now redeem
         for game in all_keys.keys():
@@ -627,6 +630,11 @@ def main(args):
                     redeemed = redeem(key)
 
                     if redeemed:
+                        # Update global redeemed trackers
+                        if _is_key_reward(key):
+                            any_keys_redeemed = True
+                        else:
+                            any_codes_redeemed = True
                         # Report what's left in THIS batch (Keys vs Codes)
                         rem_keys  = max(0, queue_keys_len  - k_index)
                         rem_codes = max(0, queue_codes_len - c_index)
@@ -639,13 +647,38 @@ def main(args):
                         elif rem_codes:
                             _L.info(f"Redeeming another {rem_codes} {'Code' if rem_codes==1 else 'Codes'}")
                         else:
-                            _L.info("No more codes left!")
+                            # Choose end-of-batch label based on mode flags and what this queue contained
+                            if args.golden or args.non_golden:
+                                end_label = "keys"
+                            elif args.other and not (args.golden or args.non_golden):
+                                end_label = "codes"
+                            else:
+                                # default: prefer keys if any were in this batch, else codes; if none, both
+                                if queue_keys_len > 0:
+                                    end_label = "keys"
+                                elif queue_codes_len > 0:
+                                    end_label = "codes"
+                                else:
+                                    end_label = "keys & codes"
+                            _L.info(f"No more {end_label} left!")
                     else:
                         # don't spam if we reached the hourly limit
                         if client.last_status == Status.TRYLATER:
                             return
 
-        _L.info("No more codes left!")
+        # Final end-of-run label: based on flags, or on what was actually redeemed
+        if args.golden or args.non_golden:
+            final_label = "keys"
+        elif args.other and not (args.golden or args.non_golden):
+            final_label = "codes"
+        else:
+            if any_keys_redeemed:
+                final_label = "keys"
+            elif any_codes_redeemed:
+                final_label = "codes"
+            else:
+                final_label = "keys & codes"
+        _L.info(f"No more {final_label} left!")
 
 
 if __name__ == "__main__":
