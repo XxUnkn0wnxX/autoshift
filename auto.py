@@ -148,6 +148,8 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
                     all_keys[g][p].append(temp_key.copy().set(platform=p))
 
     # Always print info for all requested game/platform pairs
+    # DEV NOTE: This summary mirrors the new About-to-redeem breakdown: Golden vs Non-Golden vs Other Codes.
+    #          It replaces the old 'golden-only' summary so users can see per-category counts up front.
     for g in all_keys:
         for p in all_keys[g]:
             keys_list = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
@@ -229,6 +231,8 @@ def setup_argparser():
         action="store_true",
         help="Only redeem Non-Golden keys",
     )
+    # DEV NOTE: We split non-key codes (Unknown/cosmetics/etc.) into their own selectable group via --other.
+        #          Without --other, codes are excluded when a mode flag is used, matching requested behavior.
     parser.add_argument(
         "--other",
         action="store_true",
@@ -374,6 +378,11 @@ def main(args):
                 t_keys = list(
                     filter(lambda key: not key.redeemed, all_keys[game][platform])
                 )                # Build categories & prioritised queue (global --limit aware; mode respected)
+                # DEV NOTE: Classification rules
+                #   - Golden Keys: reward matches r_golden_keys
+                #   - Non-Golden Keys: reward contains 'key' but not golden (e.g., Diamond keys)
+                #   - Codes: everything else (Unknown/cosmetics/etc.)
+                # This powers mode filtering and the per-category limit math.
                 def _is_key_reward(k):
                     try:
                         rv = (getattr(k, "reward", "") or "").lower()
@@ -390,6 +399,7 @@ def main(args):
                 codes_list         = [k for k in t_keys if not _is_key_reward(k)]                     # "Unknown", cosmetics, etc.
 
                 # ---- per-pair limit and base queue (mode-aware + --other) ----
+                # DEV NOTE: Base queue reflects the active mode, preserving redemption priority order:
                 lim = args.limit
 
                 # per-category take counters for limit math
@@ -398,6 +408,8 @@ def main(args):
                 c_take = 0
 
                 union_mode = bool(args.golden and args.non_golden)
+                # DEV NOTE: Union mode is kept for backwards-compat.
+                #          The parser enforces mutual exclusivity now, so this will normally be False.
                 other_only = bool(args.other and not args.golden and not args.non_golden)
 
                 if union_mode:
@@ -431,6 +443,9 @@ def main(args):
                     total_codes = len(codes_list)
 
                 # ---- Apply per-pair limit ----
+                # DEV NOTE: Limit is applied PER (game, platform) pair.
+                #          We compute per-category takes (g_take/ng_take/c_take) honoring priority and mode.
+                #          lim == 0 => redeem nothing but still print accurate ignore counts.
                 if lim == 0:
                     # Explicit zero means redeem nothing; still report ignores
                     redeem_queue = []
@@ -498,6 +513,10 @@ def main(args):
                 ign_codes = max(0, total_codes - red_codes)
 
                 # Build the "About to redeem …" header label based on flags
+                # DEV NOTE: Labeling rules
+                #   - --golden / --non-golden => "Key/Keys"
+                #   - --other => "Code/Codes"
+                #   - No flags => show both lowercase labels when both types are present.
                 # For --golden / --non-golden: always use "Key/Keys"
                 # For --other: always use "Code/Codes"
                 # For no mode flags: if both present show both (lowercase), else show the one present
@@ -522,7 +541,10 @@ def main(args):
                             rc = "code" if red_codes == 1 else "codes"
                             line = f"About to redeem {red_codes} {rc} for {game} on {platform}"
 
-                # ---- Rebuilt header ignore summary (simple & mode-specific) ---- (simple & mode-specific) ----
+                # ---- Rebuilt header ignore summary (simple & mode-specific) ----
+                # DEV NOTE: We removed verbose 'why' justifications.
+                #          If --limit is explicitly present in argv, we show 'due to limit' ignores.
+                #          Without --limit, we show which categories are excluded by the selected mode. (simple & mode-specific) ----
                 explicit_limit = ("--limit" in sys.argv)
 
                 g_total  = len(golden_list)
@@ -573,6 +595,7 @@ def main(args):
                 _L.info(line)
 
                 # Prepare per-iteration counters for Key/Code progress
+                # DEV NOTE: Separate counters produce accurate "Key #i/N" vs "Code #j/M" progress lines.
                 queue_keys_len  = sum(1 for k in redeem_queue if _is_key_reward(k))
                 queue_codes_len = len(redeem_queue) - queue_keys_len
                 k_index = 0
@@ -648,6 +671,7 @@ def main(args):
                             _L.info(f"Redeeming another {rem_codes} {'Code' if rem_codes==1 else 'Codes'}")
                         else:
                             # Choose end-of-batch label based on mode flags and what this queue contained
+                            # DEV NOTE: In mode flags, we pin to keys/codes accordingly; otherwise prefer keys if present.
                             if args.golden or args.non_golden:
                                 end_label = "keys"
                             elif args.other and not (args.golden or args.non_golden):
@@ -667,6 +691,7 @@ def main(args):
                             return
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
+        # DEV NOTE: We track any_keys_redeemed/any_codes_redeemed to produce a truthful final summary.
         if args.golden or args.non_golden:
             final_label = "keys"
         elif args.other and not (args.golden or args.non_golden):
@@ -692,6 +717,8 @@ if __name__ == "__main__":
     parser = setup_argparser()
     args = parser.parse_args()
 
+    # DEV NOTE: Enforce mutual exclusivity for mode flags per product spec.
+    #          If users want all categories, they should omit --golden/--non-golden/--other.
     # Enforce mutual exclusivity for mode flags: choose only one, or none for all
     mode_count = int(bool(getattr(args, 'golden', False))) + int(bool(getattr(args, 'non_golden', False))) + int(bool(getattr(args, 'other', False)))
     if mode_count > 1:
