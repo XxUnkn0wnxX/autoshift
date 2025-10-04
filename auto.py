@@ -361,32 +361,63 @@ def main(args):
                 _L.info(f"Redeeming for {game} on {platform}")
                 t_keys = list(
                     filter(lambda key: not key.redeemed, all_keys[game][platform])
-                )
-
-                # Summarise this batch by reward type for clearer logs
+                )                # Summarise this batch by reward type for clearer logs (now --limit aware)
                 def _is_key_reward(k):
                     try:
                         return "key" in (k.reward or "").lower()
                     except Exception:
                         return False
 
-                total_keys = sum(1 for k in t_keys if _is_key_reward(k))
-                total_codes = len(t_keys) - total_keys
+                # Classify everything in the batch
+                keys_list  = [k for k in t_keys if _is_key_reward(k)]
+                codes_list = [k for k in t_keys if not _is_key_reward(k)]
+                total_keys  = len(keys_list)
+                total_codes = len(codes_list)
 
-                if total_keys and total_codes:
-                    _L.info(
-                        f"About to redeem {total_keys} Key(s), {total_codes} Code(s) for {game} on {platform}"
-                    )
-                elif total_keys:
-                    _L.info(
-                        f"About to redeem {total_keys} Key(s) for {game} on {platform}"
-                    )
+                # Apply a print-only cap that prioritises Keys, then Codes
+                lim = getattr(args, "limit", 0) or 0
+                if lim <= 0:  # treat 0/None as unlimited for printing
+                    red_keys  = total_keys
+                    red_codes = total_codes
                 else:
-                    _L.info(
-                        f"About to redeem {total_codes} Code(s) for {game} on {platform}"
-                    )
+                    red_keys  = min(total_keys, lim)
+                    lim_left  = lim - red_keys
+                    red_codes = min(total_codes, max(0, lim_left))
 
-                for num, key in enumerate(t_keys):
+                ign_keys = total_keys - red_keys
+                ign_codes = total_codes - red_codes
+
+                # Plurals
+                rk_word = "Key"  if red_keys  == 1 else "Keys"
+                rc_word = "Code" if red_codes == 1 else "Codes"
+                ik_word = "Key"  if ign_keys  == 1 else "Keys"
+                ic_word = "Code" if ign_codes == 1 else "Codes"
+
+                # Build the header line (comma separator)
+                if red_keys and red_codes:
+                    line = f"About to redeem {red_keys} {rk_word}, {red_codes} {rc_word} for {game} on {platform}"
+                elif red_keys:
+                    line = f"About to redeem {red_keys} {rk_word} for {game} on {platform}"
+                else:
+                    line = f"About to redeem {red_codes} {rc_word} for {game} on {platform}"
+
+                # Append what's ignored due to --limit (only if capped)
+                if lim > 0 and (ign_keys or ign_codes):
+                    if ign_keys and ign_codes:
+                        line += f" (ignoring {ign_keys} {ik_word}, {ign_codes} {ic_word} due to --limit)"
+                    elif ign_keys:
+                        line += f" (ignoring {ign_keys} {ik_word} due to --limit)"
+                    else:
+                        line += f" (ignoring {ign_codes} {ic_word} due to --limit)"
+
+                _L.info(line)
+
+                # Build the actual runtime queue according to --limit (Keys first, then Codes)
+                redeem_queue = keys_list + codes_list
+                if lim > 0:
+                    redeem_queue = redeem_queue[:lim]
+
+                for num, key in enumerate(redeem_queue):
 
                     if (
                         num and not (num % 15)
@@ -423,7 +454,7 @@ def main(args):
                         args.limit -= num_g_keys
 
                         # Report what's left in THIS batch (Keys vs Codes)
-                        remaining_list = t_keys[num + 1 :]
+                        remaining_list = redeem_queue[num + 1 :]
                         rem_keys = sum(1 for k in remaining_list if _is_key_reward(k))
                         rem_codes = len(remaining_list) - rem_keys
 
