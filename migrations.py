@@ -29,7 +29,9 @@ def migrate_shift_codes():
         c.execute("PRAGMA table_info(keys)")
         columns = [row[1] for row in c.fetchall()]
         if "code" not in columns:
-            _L.info("Skipping code format migration: 'code' column does not exist yet.")
+            # DEV NOTE: Older schemas rename `key`->`code` via versioned migrations.
+            # Avoid user-facing noise when the upgrade hasn't run yet.
+            _L.debug("Skipping code format migration: 'code' column does not exist yet.")
             return
         c.execute("SELECT id, code FROM keys")
         rows = c.fetchall()

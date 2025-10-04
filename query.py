@@ -49,6 +49,25 @@ except Exception:
 
 
 _BANNER_SHOWN = False
+_CODE_MIGRATIONS_CHECKED = False
+
+
+def _ensure_code_format_migrated() -> None:
+    """Run legacy code-format cleanup once per process when DB access is required."""
+
+    global _CODE_MIGRATIONS_CHECKED
+    if _CODE_MIGRATIONS_CHECKED:
+        return
+
+    try:
+        from migrations import migrate_shift_codes
+    except ImportError:
+        _L.warning("Migrations module not found. Skipping code format migration.")
+        _CODE_MIGRATIONS_CHECKED = True
+        return
+
+    migrate_shift_codes()
+    _CODE_MIGRATIONS_CHECKED = True
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
 
@@ -261,7 +280,7 @@ class Database(ContextManager):
         self.__open_db()
         return self
 
-    def __exit__(self, *_) -> Optional[bool]:
+    def __exit__(self, *_ ) -> Optional[bool]:
         self.close_db()
         return False
 
@@ -299,6 +318,7 @@ class Database(ContextManager):
         if self.__open:
             return
 
+        _ensure_code_format_migrated()
         makedirs(DATA_DIR, exist_ok=True)
         self.__conn = sqlite3.connect(
             data_path("keys.db"), detect_types=sqlite3.PARSE_DECLTYPES
@@ -430,7 +450,7 @@ def progn(*args: _VT) -> _VT:
 
 # Add configurable source for the shift JSON
 SHIFT_SOURCE = (
-    "https://raw.githubusercontent.com/zarmstrong/autoshift-codes/main/shiftcodes.json"
+    "https://raw.githubusercontent.com/XxUnkn0wnxX/autoshift-codes/main/shiftcodes.json"
 )
 
 
@@ -489,6 +509,10 @@ def parse_shift_orcicorn():
         print_banner(data)
 
     for code_data in valid_codes:
+        # Normalize reward: treat missing/blank/'Unknown' as "Unknown"
+        rv = (code_data.get("reward") or "").strip()
+        code_data["reward"] = "Unknown" if (rv == "" or rv.lower() == "unknown") else rv
+
         keys: Iterable[Key] = [Key(**code_data)]
 
         # 1. special_key_handler
@@ -533,5 +557,4 @@ def update_keys():
     return keys
 
 
-db = Database()
 db = Database()

@@ -133,3 +133,12 @@ notebooks/
 # Ignore data folder
 /data
 data*
+
+# Local temp storage
+tmp/
+
+# DEV NOTE: Ignore repo metadata AGENTS.md
+AGENTS.md
+
+# DEV NOTE: Ignore repo metadata goals.md
+goals.md
