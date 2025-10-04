@@ -417,6 +417,19 @@ def main(args):
                 if lim > 0:
                     redeem_queue = redeem_queue[:lim]
 
+                # Build a view of what will ACTUALLY be attempted (respecting --golden / --non-golden)
+                def _passes_mode_filters(item):
+                    m_local = r_golden_keys.match(item.reward or "")
+                    if (args.golden and not m_local) or (args.non_golden and m_local):
+                        return False
+                    return True
+
+                effective_queue   = [k for k in redeem_queue if _passes_mode_filters(k)]
+                queue_keys_len    = sum(1 for k in effective_queue if _is_key_reward(k))
+                queue_codes_len   = len(effective_queue) - queue_keys_len
+                k_index = 0
+                c_index = 0
+
                 for num, key in enumerate(redeem_queue):
 
                     if (
@@ -428,14 +441,24 @@ def main(args):
                             _L.info("Trying to prevent a 'too many requests'-block.")
                         sleep(60)
 
-                    _L.info(f"Key #{num+1}/{len(t_keys)} for {game} on {platform}")
-                    num_g_keys = 0  # number of golden keys in this code
+                    # Decide golden/non-golden for this item
                     m = r_golden_keys.match(key.reward or "")
 
-                    # skip keys we don't want
+                    # Skip items that won't be attempted in this mode
                     if (args.golden and not m) or (args.non_golden and m):
                         _L.debug("Skipping key not wanted")
                         continue
+
+                    # Print the correct per-item counter AFTER we know we won't skip it
+                    if _is_key_reward(key):
+                        k_index += 1
+                        label = f"Key #{k_index}/{queue_keys_len}"
+                    else:
+                        c_index += 1
+                        label = f"Code #{c_index}/{queue_codes_len}"
+                    _L.info(f"{label} for {game} on {platform}")
+
+                    num_g_keys = 0  # number of golden keys in this code
 
                     if m:
                         num_g_keys = int(m.group(1) or 1)
@@ -454,9 +477,8 @@ def main(args):
                         args.limit -= num_g_keys
 
                         # Report what's left in THIS batch (Keys vs Codes)
-                        remaining_list = redeem_queue[num + 1 :]
-                        rem_keys = sum(1 for k in remaining_list if _is_key_reward(k))
-                        rem_codes = len(remaining_list) - rem_keys
+                        rem_keys  = max(0, queue_keys_len  - k_index)
+                        rem_codes = max(0, queue_codes_len - c_index)
 
                         if rem_keys and rem_codes:
                             _L.info(
