@@ -282,15 +282,11 @@ class Database(ContextManager):
     def __init__(self):
         self.__updated = False
         self.__open = False
-        self.__create_db = not path.exists(path.join(DIRNAME, "data", "keys.db"))
-        self.__open_db()
-        self.version = self.__c.execute("PRAGMA user_version").fetchone()[0]
-
-        if self.version >= 1:
-            for _k in ("game", "platform"):
-                ex = self.__c.execute(f"SELECT * from seen_{_k}s;").fetchall()
-                for row in ex:
-                    globals()[f"known_{_k}s"][row["key"]] = row["name"]
+        self.__db_path = os.path.join(DATA_DIR, "keys.db")
+        self.__create_db = not path.exists(self.__db_path)
+        self.version = 0
+        self.__conn = None  # type: ignore
+        self.__c = None  # type: ignore
 
     def __enter__(self):
         self.__open_db()
@@ -301,6 +297,7 @@ class Database(ContextManager):
         return False
 
     def execute(self, sql, parameters=None):
+        self.__open_db()
         if not self.__updated:
             self.__update_db()
         if parameters is not None:
@@ -308,9 +305,12 @@ class Database(ContextManager):
         return self.__c.execute(sql)
 
     def commit(self):
+        if not self.__open:
+            return
         self.__conn.commit()
 
     def __update_db(self):
+        self.__open_db()
         import sys
 
         from migrations import migrationFunctions
@@ -336,8 +336,9 @@ class Database(ContextManager):
 
         _ensure_code_format_migrated()
         makedirs(DATA_DIR, exist_ok=True)
+        self.__create_db = not path.exists(self.__db_path)
         self.__conn = sqlite3.connect(
-            data_path("keys.db"), detect_types=sqlite3.PARSE_DECLTYPES
+            self.__db_path, detect_types=sqlite3.PARSE_DECLTYPES
         )
         self.__conn.row_factory = sqlite3.Row
         self.__c = self.__conn.cursor()
@@ -348,8 +349,15 @@ class Database(ContextManager):
             "(id INTEGER primary key, description TEXT, "
             "key TEXT, platform TEXT, game TEXT, redeemed INTEGER)"
         )
-        self.commit()
+        self.__conn.commit()
         self.__open = True
+
+        self.version = self.__c.execute("PRAGMA user_version").fetchone()[0]
+        if self.version >= 1:
+            for _k in ("game", "platform"):
+                ex = self.__c.execute(f"SELECT * from seen_{_k}s;").fetchall()
+                for row in ex:
+                    globals()[f"known_{_k}s"][row["key"]] = row["name"]
 
     def close_db(self):
         if self.__open:
