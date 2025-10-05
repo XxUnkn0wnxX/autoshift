@@ -211,12 +211,14 @@ def _log_plan_intro(context: ManualContext) -> None:
         else ""
     )
     games_label = ", ".join(plan.games) or "fallback"
-    bypass_label = "on" if context.bypass_fail else "off"
     _L.info(
         f"Manual redeem mode: {context.normalized_code} -> games={games_label}; "
         f"probing {len(plan.games)} game(s) across {len(plan.requested_platforms)} platform(s){platform_note}. "
-        f"Reward hint: {plan.reward_hint}. Bypass-fail={bypass_label}."
+        f"Reward hint: {plan.reward_hint}."
     )
+    if context.verbose:
+        bypass_label = "on" if context.bypass_fail else "off"
+        _L.debug(f"Manual redeem bypass-fail={bypass_label}")
     if plan.skipped:
         _L.info(
             f"Manual redeem: {len(plan.skipped)} pair(s) already satisfied/blocked; "
@@ -262,13 +264,11 @@ def _handle_skipped_candidates(context: ManualContext) -> None:
             candidate.previously_redeemed = True
         elif candidate.skip_reason == "failed":
             reason = candidate.previously_failed or "UNKNOWN"
-            message = (
-                f"Previously recorded failure ({reason}) for {pair}; "
+            reward_display = candidate.reward or "Unknown"
+            _L.info(
+                f"Previously recorded failure ({reason}) ({reward_display}) for {pair}; "
                 "skipping remote call."
             )
-            if not context.bypass_fail:
-                message += " Use --bypass-fail to retry."
-            _L.info(message)
         elif candidate.skip_reason == "expired":
             _L.info(
                 f"Source marks {context.normalized_code} as expired for {pair}; "
@@ -305,15 +305,32 @@ def _redeem_candidates(
             f"on {candidate.platform} for {candidate.game}"
         )
 
-        try:
-            redeem_cb(attempt_key)
-        except SystemExit:
-            raise
-        except Exception as exc:
-            _L.error(f"Redeem callback raised {exc}; treating as UNKNOWN status.")
-            shift_client.last_status = Status.UNKNOWN(str(exc))
+        slowdown_retry = False
+        while True:
+            try:
+                redeem_cb(attempt_key)
+            except SystemExit:
+                raise
+            except Exception as exc:
+                _L.error(f"Redeem callback raised {exc}; treating as UNKNOWN status.")
+                shift_client.last_status = Status.UNKNOWN(str(exc))
 
-        status = getattr(shift_client, "last_status", Status.NONE)
+            status = getattr(shift_client, "last_status", Status.NONE)
+            if status == Status.SLOWDOWN and not slowdown_retry:
+                _L.info(
+                    "Manual redeem hit SLOWDOWN; sleeping 60s before retrying same code."
+                )
+                slowdown_retry = True
+                sleep(60)
+                continue
+            if status == Status.SLOWDOWN:
+                _L.info(
+                    "Manual redeem hit SLOWDOWN twice; treating as TRY LATER and stopping."
+                )
+                status = Status.TRYLATER
+                shift_client.last_status = status
+            break
+
         detail = getattr(status, "msg", str(status))
         result = AttemptResult(candidate=candidate, status=status, detail=detail)
         results.append(result)
@@ -334,9 +351,6 @@ def _redeem_candidates(
             candidate.previously_failed = failure_label
             candidate.failure_detail = detail
 
-        if status == Status.SLOWDOWN:
-            _L.info("Manual redeem hit SLOWDOWN; sleeping 60s before continuing.")
-            sleep(60)
         if status == Status.TRYLATER:
             _L.info("Manual redeem received TRY LATER; stopping further attempts.")
             hit_try_later = True
@@ -356,70 +370,107 @@ def _summarize_results(
         return
 
     if context.verbose:
-        _L.info("Manual redeem summary:")
+        _L.debug("Manual redeem summary:")
         for candidate in plan.skipped:
             status_hint = (
                 "success"
                 if candidate.skip_reason == "redeemed"
                 else candidate.previously_failed or candidate.skip_reason or "unknown"
             )
-            _L.info(f"  {_format_pair(candidate)} -> skipped ({status_hint})")
+            extras = ""
+            if str(status_hint).upper() == "EXPIRED":
+                extras = f" ({candidate.code}) ({candidate.reward or 'Unknown'})"
+            _L.debug(
+                f"  {_format_pair(candidate)} -> skipped ({status_hint}){extras}"
+            )
         for result in results:
             status_name = getattr(result.status, "name", str(result.status))
-            _L.info(f"  {_format_pair(result.candidate)} -> {status_name}")
+            _L.debug(f"  {_format_pair(result.candidate)} -> {status_name}")
 
     def _dedup(seq: Sequence[str]) -> List[str]:
         return list(dict.fromkeys(seq))
 
-    success_targets = _dedup(
-        [res.candidate.platform for res in results if res.status == Status.SUCCESS]
-    )
-    redeemed_targets = _dedup(
-        [res.candidate.platform for res in results if res.status == Status.REDEEMED]
-        + [
-            candidate.platform
-            for candidate in plan.skipped
-            if candidate.skip_reason == "redeemed"
-        ]
-    )
-    expired_targets = _dedup(
-        [
-            candidate.platform
-            for candidate in plan.skipped
-            if candidate.skip_reason == "expired"
-        ]
-    )
-    failure_pairs = [
-        (res.candidate.platform, _failure_label_for_status(res.status))
-        for res in results
-        if not _is_positive_status(res.status)
-    ]
-    failure_pairs.extend(
-        (
-            candidate.platform,
-            candidate.previously_failed or "UNKNOWN",
-        )
-        for candidate in plan.skipped
-        if candidate.skip_reason == "failed"
-    )
+    all_candidates: List[RedemptionCandidate] = list(plan.attempts) + list(plan.skipped)
+    platforms = _dedup([cand.platform for cand in all_candidates])
+    games = _dedup([cand.game for cand in all_candidates])
+    total_pairs = len(all_candidates)
 
-    labels: List[str] = []
-    if success_targets:
-        label = "success" if len(success_targets) == 1 else "successes"
-        labels.append(f"{', '.join(success_targets)} {label}")
-    if redeemed_targets:
-        labels.append(f"{', '.join(redeemed_targets)} already redeemed")
-    if expired_targets:
-        labels.append(f"{', '.join(expired_targets)} expired")
-    if failure_pairs:
-        formatted = ", ".join(f"{platform} {status}" for platform, status in failure_pairs)
-        labels.append(f"{formatted} failed")
+    status_counts: dict[str, int] = {}
+    status_platforms: dict[str, List[str]] = {}
+    status_order: List[str] = []
+    origin_counts: dict[str, int] = {}
 
-    outcome_label = ", ".join(labels) if labels else "no successes"
-    if hit_try_later:
-        outcome_label += ", TRY-LATER encountered"
+    def _note_status(label: str, platform: str) -> None:
+        if not label:
+            label = "UNKNOWN"
+        if label not in status_counts:
+            status_counts[label] = 0
+            status_platforms[label] = []
+            status_order.append(label)
+        status_counts[label] += 1
+        status_platforms[label].append(platform)
 
-    _L.info(f"Manual redeem outcome: {outcome_label}.")
+    for result in results:
+        status = result.status
+        if _is_positive_status(status):
+            label = getattr(status, "name", str(status)) or "SUCCESS"
+        else:
+            label = _failure_label_for_status(status)
+        _note_status(label, result.candidate.platform)
+        origin = result.candidate.origin or "unknown"
+        origin_counts[origin] = origin_counts.get(origin, 0) + 1
+
+    for candidate in plan.skipped:
+        if candidate.skip_reason == "redeemed":
+            label = "REDEEMED"
+        elif candidate.skip_reason == "expired":
+            label = candidate.preclassified_status or "EXPIRED"
+        elif candidate.skip_reason == "failed":
+            label = candidate.previously_failed or "FAILED"
+        else:
+            label = (candidate.skip_reason or "SKIPPED").upper()
+        _note_status(label, candidate.platform)
+        origin = candidate.origin or "unknown"
+        origin_counts[origin] = origin_counts.get(origin, 0) + 1
+
+    summary_line = (
+        f"Manual redeem outcome: [{plan.normalized_code}] - "
+        f"[Platforms: {', '.join(platforms) if platforms else 'none'}] - "
+        f"[Games: {', '.join(games) if games else 'none'}] - "
+        f"[Count {total_pairs}]"
+    )
+    _L.info(summary_line)
+
+    if context.verbose and origin_counts:
+        origin_labels = {
+            "db": "database",
+            "shift": "SHiFT source",
+            "fallback": "fallback",
+        }
+        origin_fragments: List[str] = []
+        for key in ("db", "shift", "fallback"):
+            if key in origin_counts:
+                origin_fragments.append(f"{origin_labels[key]} {origin_counts[key]}")
+        for key, value in origin_counts.items():
+            if key not in origin_labels:
+                origin_fragments.append(f"{key} {value}")
+        if origin_fragments:
+            _L.debug("Count sources: " + ", ".join(origin_fragments))
+
+    if status_counts:
+        status_segments: List[str] = []
+        for label in status_order:
+            platforms_for_label = _dedup(status_platforms[label])
+            fragment = f"{label} x{status_counts[label]}"
+            if platforms_for_label:
+                fragment += f" ({', '.join(platforms_for_label)})"
+            status_segments.append(fragment)
+        status_line = "Status breakdown: " + "; ".join(status_segments)
+        if hit_try_later:
+            status_line += "; TRY-LATER encountered"
+        _L.info(status_line)
+    elif hit_try_later:
+        _L.info("Status breakdown: TRY-LATER encountered")
 
 
 def _ensure_manual_flags_allowed(args) -> None:

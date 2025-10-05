@@ -797,9 +797,26 @@ def main(args):
                         label = f"Code #{c_index}/{queue_codes_len}"
                     _L.info(f"{label} for {game} on {platform}")
 
-                    # Attempt redeem
-                    redeemed = redeem(attempt_key)
-                    status = getattr(client, "last_status", Status.NONE)
+                    slowdown_retry = False
+                    while True:
+                        redeemed = redeem(attempt_key)
+                        status = getattr(client, "last_status", Status.NONE)
+                        if status == Status.SLOWDOWN and not slowdown_retry:
+                            _L.info(
+                                "Auto redeem hit SLOWDOWN; sleeping 60s before retrying same code."
+                            )
+                            slowdown_retry = True
+                            sleep(60)
+                            continue
+                        if status == Status.SLOWDOWN:
+                            _L.info(
+                                "Auto redeem hit SLOWDOWN twice; treating as TRY LATER and ending run."
+                            )
+                            status = Status.TRYLATER
+                            client.last_status = status
+                            redeemed = False
+                        break
+
                     detail = getattr(status, "msg", str(status))
 
                     if redeemed:
