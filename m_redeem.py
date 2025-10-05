@@ -15,6 +15,7 @@ from redeem_logic import (
     RedemptionCandidate,
     RedemptionPlan,
     build_redemption_plan,
+    format_status_detail,
     normalize_requested_platforms,
     normalize_shift_code,
 )
@@ -282,7 +283,7 @@ def _handle_skipped_candidates(context: ManualContext) -> None:
                     key_obj,
                     candidate.platform,
                     status_label,
-                    "Preclassified expiry from source metadata",
+                    f"Preclassified expiry from source metadata ({candidate.reward})",
                 )
         else:
             _L.info(
@@ -331,12 +332,11 @@ def _redeem_candidates(
                 shift_client.last_status = status
             break
 
-        detail = getattr(status, "msg", str(status))
+        detail = format_status_detail(status, attempt_key)
         result = AttemptResult(candidate=candidate, status=status, detail=detail)
         results.append(result)
 
         if _is_positive_status(status):
-            query.db.set_redeemed(attempt_key)
             candidate.previously_redeemed = True
             candidate.previously_failed = None
             candidate.failure_detail = None

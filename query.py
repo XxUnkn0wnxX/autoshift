@@ -464,7 +464,12 @@ class Database(ContextManager):
     def fetch_outcomes_for_code(self, code: str):
         redeemed_rows = self.execute(
             """
-            SELECT keys.id AS key_id, keys.game, rk.platform
+            SELECT keys.id AS key_id,
+                   keys.game,
+                   rk.platform,
+                   rk.status,
+                   rk.detail,
+                   rk.attempted_at
             FROM redeemed_keys rk
             JOIN keys ON keys.id = rk.key_id
             WHERE keys.code = ?
@@ -480,11 +485,19 @@ class Database(ContextManager):
                 continue
             redeemed[(game, platform)] = {
                 "key_id": row["key_id"],
+                "status": row["status"],
+                "detail": row["detail"],
+                "attempted_at": row["attempted_at"],
             }
 
         failed_rows = self.execute(
             """
-            SELECT keys.id AS key_id, keys.game, fk.platform, fk.status, fk.detail
+            SELECT keys.id AS key_id,
+                   keys.game,
+                   fk.platform,
+                   fk.status,
+                   fk.detail,
+                   fk.attempted_at
             FROM failed_keys fk
             JOIN keys ON keys.id = fk.key_id
             WHERE keys.code = ?
@@ -502,6 +515,7 @@ class Database(ContextManager):
                 "key_id": row["key_id"],
                 "status": row["status"],
                 "detail": row["detail"],
+                "attempted_at": row["attempted_at"],
             }
 
         return redeemed, failed
@@ -555,11 +569,25 @@ class Database(ContextManager):
                 ret.append(k)
         return num, ret
 
-    def set_redeemed(self, key):
-        # Mark as redeemed for this key id and platform
+    def set_redeemed(
+        self,
+        key: Key,
+        status: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        if getattr(key, "id", None) is None:
+            raise ValueError("Cannot record redeemed outcome without a persisted key id")
+
         self.execute(
-            "INSERT OR IGNORE INTO redeemed_keys (key_id, platform) VALUES (?, ?)",
-            (key.id, key.platform),
+            """
+            INSERT INTO redeemed_keys (key_id, platform, status, detail, attempted_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key_id, platform) DO UPDATE SET
+                status = excluded.status,
+                detail = excluded.detail,
+                attempted_at = excluded.attempted_at
+            """,
+            (key.id, key.platform, status, detail),
         )
         self.execute(
             "DELETE FROM failed_keys WHERE key_id = ? AND platform = ?",

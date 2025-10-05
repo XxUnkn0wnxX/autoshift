@@ -39,6 +39,7 @@ from redeem_logic import (
     RedemptionCandidate,
     RedemptionPlan,
     build_redemption_plan,
+    format_status_detail,
     normalize_requested_platforms,
     normalize_shift_code,
 )
@@ -72,17 +73,15 @@ def redeem(key: "Key"):
     status = client.redeem(key.code, query.known_games[key.game], key.platform)
     _L.debug(f"Status: {status}")
 
+    detail = format_status_detail(status, key)
+
     # set redeemed status only for positive outcomes
     if status in (Status.SUCCESS, Status.REDEEMED):
-        query.db.set_redeemed(key)
+        status_label = getattr(status, "name", "SUCCESS")
+        query.db.set_redeemed(key, status_label, detail)
 
     # notify user
-    try:
-        # this may fail if there are other `{<something>}` in the string..
-        msg = status.msg.format(**locals())
-    except Exception:
-        msg = status.msg
-
+    msg = detail
     if status == Status.INVALID:
         msg = f"Cannot redeem on {key.platform}"
 
@@ -778,7 +777,7 @@ def main(args):
                                 attempt_key,
                                 candidate.platform,
                                 candidate.preclassified_status or "EXPIRED",
-                                "Preclassified expiry from source metadata",
+                                f"Preclassified expiry from source metadata ({candidate.reward})",
                             )
                             candidate.should_record_preclassification = False
                         processed_pairs.add(pair_id)
@@ -817,7 +816,7 @@ def main(args):
                             redeemed = False
                         break
 
-                    detail = getattr(status, "msg", str(status))
+                    detail = format_status_detail(status, attempt_key)
 
                     if redeemed:
                         candidate.previously_redeemed = True

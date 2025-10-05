@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from common import _L
 import query
 from query import ALL_SUPPORTED_GAMES, ALL_SUPPORTED_PLATFORMS, Key
+from shift import Status
 
 UTC = _dt.timezone.utc
 
@@ -445,4 +446,23 @@ __all__ = [
     "build_redemption_plan",
     "normalize_shift_code",
     "normalize_requested_platforms",
+    "format_status_detail",
 ]
+
+
+def format_status_detail(status: Status, key: Key) -> str:
+    """Render a Status message with key metadata, falling back gracefully."""
+
+    detail = getattr(status, "msg", str(status))
+
+    # First try the common {key.reward}/{key.code} placeholders.
+    try:
+        return detail.format(key=key)
+    except Exception:
+        pass
+
+    # Some dynamically constructed Status objects may store the rendered string.
+    try:
+        return str(detail.format())  # type: ignore[arg-type]
+    except Exception:
+        return str(detail)
