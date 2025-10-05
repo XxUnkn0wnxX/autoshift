@@ -31,6 +31,7 @@ if "--profile" in sys.argv:
     if i + 1 < len(sys.argv):
         os.environ["AUTOSHIFT_PROFILE"] = sys.argv[i + 1]
 
+from collections import deque
 from typing import TYPE_CHECKING, Optional
 
 from common import _L, DEBUG, INFO, data_path, DATA_DIR
@@ -143,20 +144,17 @@ def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
     )
 
 
-def _log_auto_skip(code: str, candidate: RedemptionCandidate, bypass_fail: bool) -> None:
+def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool) -> None:
     label = _format_pair(code, candidate)
     if candidate.skip_reason == "redeemed":
-        _L.info(f"{label}: previously recorded success; skipping remote call.")
+        _L.debug(f"{label}: previously recorded success; skipping remote call.")
     elif candidate.skip_reason == "failed":
         reason = candidate.previously_failed or "UNKNOWN"
-        suffix = "" if bypass_fail else " Use --bypass-fail to retry."
-        _L.info(
-            f"{label}: previously recorded failure ({reason}); skipping remote call.{suffix}"
-        )
+        _L.debug(f"{label}: previously recorded failure ({reason}); skipping remote call.")
     elif candidate.skip_reason == "expired":
-        _L.info(f"{label}: source expired; recording EXPIRED without remote call.")
+        _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
     else:
-        _L.info(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
+        _L.debug(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
 
 
 def parse_redeem_mapping(args):
@@ -745,10 +743,25 @@ def main(args):
                 k_index = 0
                 c_index = 0
 
+                # Track previously redeemed skips for summary output
+                ignored_redeemed_g = 0
+                ignored_redeemed_ng = 0
+                ignored_redeemed_codes = 0
+
+                failed_g = 0
+                failed_ng = 0
+                failed_codes = 0
+
+                pending_queue = deque(redeem_queue)
+                overflow_index = len(redeem_queue)
+                attempted_count = 0
+
                 # Iterate and redeem
-                for idx, key in enumerate(redeem_queue):
+                while pending_queue:
+                    key = pending_queue.popleft()
+
                     # polite throttling
-                    if (idx and not (idx % 15)) or client.last_status == Status.SLOWDOWN:
+                    if (attempted_count and not (attempted_count % 15)) or client.last_status == Status.SLOWDOWN:
                         if client.last_status == Status.SLOWDOWN:
                             _L.info("Slowing down a bit..")
                         else:
@@ -804,7 +817,31 @@ def main(args):
                                 f"Preclassified expiry from source metadata ({candidate.reward})",
                             )
                             candidate.should_record_preclassification = False
+
+                        if candidate.skip_reason == "redeemed":
+                            counted_key = _key_for_candidate(candidate)
+                            if _is_key_reward(counted_key):
+                                if _is_golden(counted_key):
+                                    ignored_redeemed_g += 1
+                                else:
+                                    ignored_redeemed_ng += 1
+                            else:
+                                ignored_redeemed_codes += 1
+
                         processed_pairs.add(pair_id)
+
+                        if lim and lim > 0:
+                            while (
+                                (attempted_count + len(pending_queue)) < lim
+                                and overflow_index < len(base_queue)
+                            ):
+                                extra_key = base_queue[overflow_index]
+                                pending_queue.append(extra_key)
+                                if _is_key_reward(extra_key):
+                                    queue_keys_len += 1
+                                else:
+                                    queue_codes_len += 1
+                                overflow_index += 1
                         continue
                     if pair_id in processed_pairs:
                         continue
@@ -819,6 +856,8 @@ def main(args):
                         c_index += 1
                         label = f"Code #{c_index}/{queue_codes_len}"
                     _L.info(f"{label} for {game} on {platform}")
+
+                    attempted_count += 1
 
                     slowdown_retry = False
                     while True:
@@ -889,9 +928,27 @@ def main(args):
                         )
                         candidate.previously_failed = failure_label
                         candidate.failure_detail = detail
+
+                        if _is_key_reward(attempt_key):
+                            if _is_golden(attempt_key):
+                                failed_g += 1
+                            else:
+                                failed_ng += 1
+                        else:
+                            failed_codes += 1
                         # don't spam if we reached the hourly limit
                         if status == Status.TRYLATER:
                             return
+
+                ignored_total = ignored_redeemed_g + ignored_redeemed_ng + ignored_redeemed_codes
+                if ignored_total:
+                    _L.info(
+                        f"\t{ignored_redeemed_g} Golden Keys, {ignored_redeemed_ng} Non-Golden Keys, {ignored_redeemed_codes} Codes IGNORED (already redeemed)."
+                    )
+
+                _L.info(
+                    f"\t{failed_g} Golden Keys, {failed_ng} Non-Golden Keys, {failed_codes} Codes FAILED."
+                )
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
         # DEV NOTE: We track any_keys_redeemed/any_codes_redeemed to produce a truthful final summary.
