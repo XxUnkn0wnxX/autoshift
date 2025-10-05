@@ -124,6 +124,9 @@ def _extract_manual_request(args) -> Optional[tuple[str, Optional[Sequence[str]]
     if ":" in entry:
         code_part, platform_part = entry.split(":", 1)
         if not _looks_like_shift_code(code_part):
+            token = code_part.strip().lower()
+            if token in query.known_games or token in getattr(query.known_games, "inv", {}):
+                return None
             raise ManualRedeemUsageError(
                 "Manual --redeem expects a SHiFT code followed by optional platforms (e.g. CODE-...:steam,epic)."
             )

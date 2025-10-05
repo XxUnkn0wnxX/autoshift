@@ -326,23 +326,25 @@ def setup_argparser():
         action="store_true",
         help="Also redeem generic non-key codes (Unknown/cosmetics). Without this, Codes are excluded when using --golden or --non-golden.",
     )
-    # Provide static choices so argparse can validate without importing query/db
-    parser.add_argument(
-        "--games",
-        type=str,
-        required=False,
-        choices=games,
-        nargs="+",
-        help=("Games you want to query SHiFT keys for"),
-    )
-    parser.add_argument(
-        "--platforms",
-        type=str,
-        required=False,
-        choices=platforms,
-        nargs="+",
-        help=("Platforms you want to query SHiFT keys for"),
-    )
+    # DEV NOTE (2025-10-05): Legacy --games/--platforms mode is intentionally disabled while we
+    # align bulk logging with the manual pipeline. Leaving the argument definitions commented out
+    # prevents argparse from accepting them, but preserves the original code for future reference.
+    # parser.add_argument(
+    #     "--games",
+    #     type=str,
+    #     required=False,
+    #     choices=games,
+    #     nargs="+",
+    #     help=("Games you want to query SHiFT keys for"),
+    # )
+    # parser.add_argument(
+    #     "--platforms",
+    #     type=str,
+    #     required=False,
+    #     choices=platforms,
+    #     nargs="+",
+    #     help=("Platforms you want to query SHiFT keys for"),
+    # )
     # DEV NOTE: Document both mapping and manual flows inline so --help stays truthful.
     parser.add_argument(
         "--redeem",
@@ -420,6 +422,12 @@ def main(args):
     if shift_src:
         query.set_shift_source(shift_src)
 
+    if not getattr(args, "redeem", None):
+        _L.error(
+            "--redeem is now required. Legacy --games/--platforms mode is disabled because --redeem provides the improved logging pipeline."
+        )
+        sys.exit(2)
+
     with db:
         if not client:
             # DEV NOTE: Password/credential source detection & debug logging
@@ -466,24 +474,32 @@ def main(args):
         bypass_fail = bool(getattr(args, "bypass_fail", False))
 
         redeem_mapping = parse_redeem_mapping(args)
-        if redeem_mapping:
-            # New mapping mode
-            games = list(redeem_mapping.keys())
-            platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
-            _L.info("Redeem mapping (game: platforms):")
-            for game, plats in redeem_mapping.items():
-                _L.info(f"  {game}: {', '.join(plats)}")
-        else:
-            # Legacy mode
-            games = args.games or list(known_games.keys())
-            platforms = args.platforms or list(known_platforms)
-            _L.warning(
-                "You are using the legacy --games/--platforms format. "
-                "Prefer --redeem bl3:steam,epic bl2:epic for more control."
+        if not redeem_mapping:
+            _L.error(
+                "Bulk mode requires --redeem mapping. Legacy --games/--platforms flow is disabled."
             )
-            _L.info("Redeeming all of these games/platforms combinations:")
-            _L.info(f"  Games: {', '.join(games)}")
-            _L.info(f"  Platforms: {', '.join(platforms)}")
+            sys.exit(2)
+
+        # New mapping mode
+        games = list(redeem_mapping.keys())
+        platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
+        _L.info("Redeem mapping (game: platforms):")
+        for game, plats in redeem_mapping.items():
+            _L.info(f"  {game}: {', '.join(plats)}")
+
+        # DEV NOTE (2025-10-05): The legacy fallback that relied on --games/--platforms is kept below
+        # for posterity but intentionally commented out. Do not delete until we confirm we will never
+        # need to revive the old interface.
+        # else:
+        #     games = args.games or list(known_games.keys())
+        #     platforms = args.platforms or list(known_platforms)
+        #     _L.warning(
+        #         "You are using the legacy --games/--platforms format. "
+        #         "Prefer --redeem bl3:steam,epic bl2:epic for more control."
+        #     )
+        #     _L.info("Redeeming all of these games/platforms combinations:")
+        #     _L.info(f"  Games: {', '.join(games)}")
+        #     _L.info(f"  Platforms: {', '.join(platforms)}")
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
 
@@ -495,6 +511,8 @@ def main(args):
         # Track what actually got redeemed across the whole run
         any_keys_redeemed = False
         any_codes_redeemed = False
+
+        last_end_label: Optional[str] = None
 
         # now redeem
         for game in all_keys.keys():
@@ -859,6 +877,7 @@ def main(args):
                                 else:
                                     end_label = "keys & codes"
                             _L.info(f"No more {end_label} left!")
+                            last_end_label = end_label
                     else:
                         failure_label = _failure_label_for_status(status)
                         query.db.record_failure(
@@ -886,7 +905,8 @@ def main(args):
                 final_label = "codes"
             else:
                 final_label = "keys & codes"
-        _L.info(f"No more {final_label} left!")
+        if last_end_label != final_label:
+            _L.info(f"No more {final_label} left!")
 
 
 if __name__ == "__main__":
