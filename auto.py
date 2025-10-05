@@ -31,10 +31,18 @@ if "--profile" in sys.argv:
     if i + 1 < len(sys.argv):
         os.environ["AUTOSHIFT_PROFILE"] = sys.argv[i + 1]
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from common import _L, DEBUG, INFO, data_path, DATA_DIR
 from m_redeem import maybe_handle_manual_redeem
+from redeem_logic import (
+    RedemptionCandidate,
+    RedemptionPlan,
+    build_redemption_plan,
+    normalize_requested_platforms,
+    normalize_shift_code,
+)
+from shift import Status
 
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
@@ -58,7 +66,6 @@ under certain conditions; see LICENSE for details.
 def redeem(key: "Key"):
     """Redeem key and set as redeemed if successful"""
     import query
-    from shift import Status
 
     _L.info(f"Trying to redeem {key.reward} ({key.code}) on {key.platform}")
     # use query.known_games (query imported above) instead of relying on a global name
@@ -81,7 +88,76 @@ def redeem(key: "Key"):
 
     _L.info("  " + msg)
 
-    return status == Status.SUCCESS
+    return status in (Status.SUCCESS, Status.REDEEMED)
+
+
+def _load_plan(plan_cache: dict[str, RedemptionPlan], code: str, bypass_fail: bool) -> RedemptionPlan:
+    normalized = normalize_shift_code(code) or code
+    plan = plan_cache.get(normalized)
+    if plan is None:
+        plan = build_redemption_plan(
+            normalized,
+            normalize_requested_platforms(None),
+            bypass_fail=bypass_fail,
+        )
+        plan_cache[normalized] = plan
+    return plan
+
+
+def _find_candidate(
+    plan: RedemptionPlan, game: str, platform: str
+) -> tuple[Optional[RedemptionCandidate], Optional[str]]:
+    for candidate in plan.attempts:
+        if candidate.game == game and candidate.platform == platform:
+            return candidate, "attempt"
+    for candidate in plan.skipped:
+        if candidate.game == game and candidate.platform == platform:
+            return candidate, "skip"
+    return None, None
+
+
+def _format_pair(code: str, candidate: RedemptionCandidate) -> str:
+    return f"{code} -> {candidate.platform}:{candidate.game}"
+
+
+def _failure_label_for_status(status: Status) -> str:
+    if status == Status.EXPIRED:
+        return "EXPIRED"
+    if status == Status.INVALID:
+        return "INVALID"
+    if status == Status.SLOWDOWN:
+        return "RATELIMIT"
+    if status == Status.TRYLATER:
+        return "TRYLATER"
+    if status == Status.REDIRECT:
+        return "NETWORK_ERROR"
+    if status in (Status.NONE, Status.UNKNOWN):
+        return "UNKNOWN_ERROR"
+    return getattr(status, "name", "UNKNOWN_ERROR")
+
+
+def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
+    return candidate.key.copy().set(
+        platform=candidate.platform,
+        game=candidate.game,
+        code=candidate.code,
+    )
+
+
+def _log_auto_skip(code: str, candidate: RedemptionCandidate, bypass_fail: bool) -> None:
+    label = _format_pair(code, candidate)
+    if candidate.skip_reason == "redeemed":
+        _L.info(f"{label}: previously recorded success; skipping remote call.")
+    elif candidate.skip_reason == "failed":
+        reason = candidate.previously_failed or "UNKNOWN"
+        suffix = "" if bypass_fail else " Use --bypass-fail to retry."
+        _L.info(
+            f"{label}: previously recorded failure ({reason}); skipping remote call.{suffix}"
+        )
+    elif candidate.skip_reason == "expired":
+        _L.info(f"{label}: source expired; recording EXPIRED without remote call.")
+    else:
+        _L.info(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
 
 
 def parse_redeem_mapping(args):
@@ -276,6 +352,11 @@ def setup_argparser():
         """),
     )
     parser.add_argument(
+        "--bypass-fail",
+        action="store_true",
+        help="Ignore failed_keys/expiry short-circuits; attempt pairs again and update outcomes.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -378,6 +459,8 @@ def main(args):
         if maybe_handle_manual_redeem(args, client, redeem):
             return
 
+        bypass_fail = bool(getattr(args, "bypass_fail", False))
+
         redeem_mapping = parse_redeem_mapping(args)
         if redeem_mapping:
             # New mapping mode
@@ -399,6 +482,9 @@ def main(args):
             _L.info(f"  Platforms: {', '.join(platforms)}")
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
+
+        plan_cache: dict[str, RedemptionPlan] = {}
+        processed_pairs: set[tuple[str, str, str]] = set()
 
         _L.info("Trying to redeem now.")
 
@@ -672,6 +758,36 @@ def main(args):
                             continue
                     # else: default mode allows all
 
+                    normalized_code = normalize_shift_code(key.code) or key.code
+                    pair_id = (normalized_code, game, platform)
+                    plan = _load_plan(plan_cache, normalized_code, bypass_fail)
+                    candidate, disposition = _find_candidate(plan, game, platform)
+                    if candidate is None:
+                        _L.debug(
+                            f"No candidate metadata for {normalized_code} on {platform}:{game}; skipping."
+                        )
+                        continue
+                    if disposition == "skip":
+                        _log_auto_skip(normalized_code, candidate, bypass_fail)
+                        if (
+                            candidate.skip_reason == "expired"
+                            and candidate.should_record_preclassification
+                        ):
+                            attempt_key = _key_for_candidate(candidate)
+                            query.db.record_failure(
+                                attempt_key,
+                                candidate.platform,
+                                candidate.preclassified_status or "EXPIRED",
+                                "Preclassified expiry from source metadata",
+                            )
+                            candidate.should_record_preclassification = False
+                        processed_pairs.add(pair_id)
+                        continue
+                    if pair_id in processed_pairs:
+                        continue
+                    attempt_key = _key_for_candidate(candidate)
+                    processed_pairs.add(pair_id)
+
                     # Per-item progress line
                     if _is_key_reward(key):
                         k_index += 1
@@ -682,9 +798,14 @@ def main(args):
                     _L.info(f"{label} for {game} on {platform}")
 
                     # Attempt redeem
-                    redeemed = redeem(key)
+                    redeemed = redeem(attempt_key)
+                    status = getattr(client, "last_status", Status.NONE)
+                    detail = getattr(status, "msg", str(status))
 
                     if redeemed:
+                        candidate.previously_redeemed = True
+                        candidate.previously_failed = None
+                        candidate.failure_detail = None
                         # Update global redeemed trackers
                         if _is_key_reward(key):
                             any_keys_redeemed = True
@@ -718,8 +839,17 @@ def main(args):
                                     end_label = "keys & codes"
                             _L.info(f"No more {end_label} left!")
                     else:
+                        failure_label = _failure_label_for_status(status)
+                        query.db.record_failure(
+                            attempt_key,
+                            candidate.platform,
+                            failure_label,
+                            detail,
+                        )
+                        candidate.previously_failed = failure_label
+                        candidate.failure_detail = detail
                         # don't spam if we reached the hourly limit
-                        if client.last_status == Status.TRYLATER:
+                        if status == Status.TRYLATER:
                             return
 
         # Final end-of-run label: based on flags, or on what was actually redeemed

@@ -211,3 +211,34 @@ def migrate_redeemed_table(conn):
     c.execute("DROP TABLE keys_old")
     conn.commit()
     return True
+
+
+@register(4)
+def add_failed_keys_table(conn: sqlite3.Connection):
+    """Add failed_keys outcome table and extend keys metadata."""
+
+    c = conn.cursor()
+
+    # Ensure failed_keys exists to persist negative outcomes per (key, platform)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS failed_keys (
+            key_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            status TEXT NOT NULL,
+            detail TEXT,
+            attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (key_id, platform),
+            FOREIGN KEY (key_id) REFERENCES keys(id)
+        )
+        """
+    )
+
+    # Add provenance column to keys if missing
+    c.execute("PRAGMA table_info(keys)")
+    existing_columns = {row[1] for row in c.fetchall()}
+    if "source" not in existing_columns:
+        c.execute("ALTER TABLE keys ADD COLUMN source TEXT")
+
+    conn.commit()
+    return True
