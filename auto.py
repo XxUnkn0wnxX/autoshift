@@ -34,7 +34,7 @@ if "--profile" in sys.argv:
 from collections import deque
 from typing import TYPE_CHECKING, Optional
 
-from common import _L, DEBUG, INFO, data_path, DATA_DIR
+from common import _L, DEBUG, INFO, data_path, DATA_DIR, PROFILE
 from m_redeem import maybe_handle_manual_redeem
 from redeem_logic import (
     RedemptionCandidate,
@@ -261,14 +261,25 @@ def dump_db_to_csv(filename):
     base = os.path.basename(filename)
     out_path = data_path(base)
 
+    db_path = os.path.join(DATA_DIR, "keys.db")
+    if not os.path.exists(db_path):
+        profile_label = PROFILE or "default"
+        _L.error(
+            f"No database found for profile '{profile_label}'. Run the main autoshift command first to populate keys."
+        )
+        sys.exit(2)
+
     with db:
         conn = db._Database__conn  # Access the underlying sqlite3.Connection
         c = conn.cursor()
         c.execute("SELECT * FROM keys")
         rows = c.fetchall()
         if not rows:
-            _L.info("No data to dump.")
-            return
+            profile_label = PROFILE or "default"
+            _L.error(
+                f"Database for profile '{profile_label}' contains no keys. Run autoshift to load SHiFT codes before exporting."
+            )
+            sys.exit(2)
         headers = [desc[0] for desc in c.description]
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
