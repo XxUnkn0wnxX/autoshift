@@ -354,6 +354,7 @@ def setup_argparser():
             Specify redemption targets.
             Mapping mode: bl3:steam,epic bl2:epic
             Manual mode: SHiFT code or code:platform[,platform...] to filter targets.
+            Required for bulk runs; legacy --games/--platforms flags are disabled.
             Manual mode cannot be combined with --schedule.
         """),
     )

@@ -52,58 +52,52 @@ pip install -r requirements.txt
 
 # ⚠️ Database Change Notice
 
-**As of the 9/18/2025 version, the way redeemed keys are tracked has changed.**  
-Redemption status is now tracked in a separate table for each key and platform combination.  
+**As of the 2025-10-05 build, the database schema now stores both successful and failed outcomes in dedicated tables (`redeemed_keys`, `failed_keys`) with attempt metadata.**  
+On upgrade we rebuild those tables so historical results can be tracked per platform.
 
-**On first run after upgrade, all keys will be retried to ensure the database is properly marked. This may take a long time if you have a large key database.**  
-This is expected and only happens once; subsequent runs will be fast.
+**If a migration detects a corrupt or partially-upgraded table it will automatically drop the affected tables (or remove `keys.db`) so a clean schema can be recreated on the next run.**  
+When that happens you will see a log message noting the reset; simply re-run the tool and it will repopulate from the SHiFT feed and cached data.
+
+The first run after upgrading may retry a larger batch of codes while the new metadata is backfilled. This is expected and only needs to finish once.
 
 ## Usage Instructions
 
-You can now specify exactly which platforms should redeem which games' SHiFT codes using the `--redeem` argument.  
-**Recommended:** Use `--redeem` for fine-grained control.  
-**Manual:** Provide a single SHiFT code (with an optional platform filter) to trigger the manual redeem flow.  
-**Legacy:** You can still use `--games` and `--platforms` together, but a warning will be printed and all games will be redeemed on all platforms.
+`--redeem` is **mandatory** for bulk runs. Provide one or more `game:platform[,platform...]` targets so the CLI knows exactly which combinations to attempt. The legacy `--games/--platforms` flags have been retired in favour of the richer logging and skip metadata provided by `--redeem`.
 
-### New (Recommended) Usage
+### Bulk Mapping (required)
 
-- Redeem codes for Borderlands 3 on Steam and Epic, and Borderlands 2 on Epic only:
+- Redeem Borderlands 2 on PlayStation and Xbox using individual entries:
 ```sh
-./auto.py --redeem bl3:steam,epic bl2:epic
+./auto.py --redeem bl2:psn bl2:xbox
 ```
 
-- Redeem codes for Borderlands 3 on Steam only:
+- Redeem the same set with a single entry that lists multiple platforms:
 ```sh
-./auto.py --redeem bl3:steam
+./auto.py --redeem bl2:xbox,steam,psn
 ```
 
-- You can still use other options, e.g.:
+- Combine limits and filters as needed (golden-only with a per-pair cap):
 ```sh
 ./auto.py --redeem bl3:steam,epic --golden --limit 10
 ```
 
+Mapping mode automatically reports how many golden, non-golden, and other codes exist per game/platform pair, and the end-of-run summary now condenses the outcome for each code rather than listing every skip individually.
+
 ### Manual Single-Code Usage
 
-- Redeem a code across every supported platform:
+- Redeem a specific code across every supported platform:
 ```sh
 ./auto.py --redeem J9RT3-RBJ5T-WRTBK-JB3J3-5TB3R --shift-source data/shiftcodes.json --profile myprofile
 ```
 
-- Redeem a code on specific platforms:
+- Limit the manual run to a subset of platforms:
 ```sh
 ./auto.py --redeem J9RT3-RBJ5T-WRTBK-JB3J3-5TB3R:psn,xbox --shift-source data/shiftcodes.json --profile myprofile
 ```
 
-Manual mode treats **already redeemed** responses the same as successes and prints a concise `Manual redeem outcome:` summary. It will skip inserting duplicate rows when the SHiFT source already contains metadata for the code.
+Manual mode now includes the reward title and original code in skip messages, and the `Manual redeem outcome` summary groups results with counts to avoid duplicated lines. Previously recorded successes or expiries are surfaced in DEBUG logs with the same rich detail used by bulk mode.
 
-> **Manual mode restrictions**: `--schedule`, `--limit`, `--games`, `--platforms`, `--golden`, `--non-golden`, and `--other` are rejected when you supply a single code. Use mapping mode instead if you need those flags.
-
-### Legacy Usage (still supported, but prints a warning)
-
-- Redeem codes for Borderlands 3 and Borderlands 2 on Steam and Epic (all combinations):
-```sh
-./auto.py --games bl3 bl2 --platforms steam epic
-```
+> **Manual mode restrictions**: `--schedule`, `--limit`, `--golden`, `--non-golden`, and `--other` are rejected when you supply a single code. Legacy `--games/--platforms` flags are no longer accepted anywhere. Use mapping mode instead if you need batching features.
 
 ## Override SHiFT source
 
@@ -308,7 +302,7 @@ spec:
 
 > **Note:**  
 > When using Kubernetes, set the `SHIFT_ARGS` environment variable in your deployment manifest to include your `--redeem ...` options.  
-> If you use both `SHIFT_GAMES`/`SHIFT_PLATFORMS` and `--redeem`, the `--redeem` mapping will take precedence and a warning will be printed if legacy options are also present.
+> The legacy `SHIFT_GAMES` / `SHIFT_PLATFORM` helpers are now deprecated and should be removed from your environment. They no longer map to CLI flags and bulk runs will fail if you rely on them.
 
 ## Variables
 
@@ -352,45 +346,17 @@ Notes about autoshift behavior:
 - The tool contains a heuristic: if the CLI-provided password contains `!` and an environment password (SHIFT_PASS or AUTOSHIFT_PASS_RAW) appears longer, the environment value will be preferred. Still, supplying the full password via SHIFT_PASS (or via a container secret) is the most reliable method.
 - Do not commit passwords to command history or scripts. Use environment variables, container secrets, or mounted files / K8s Secrets.
 
-#### **SHIFT_GAMES** (recommended)
-The game(s) you want to redeem codes for
+#### **SHIFT_GAMES** (deprecated)
+Previously accepted a space-separated list of game codes. The CLI no longer honours this value—configure explicit targets with `SHIFT_ARGS='--redeem ...'` instead.
 
-Default: `bl4 bl3 blps bl2 bl`
-
-Example: `blps` or `bl bl2 bl3`
-
-|Game|Code|
-|---|---|
-|Borderlands|`bl1`|
-|Borderlands 2|`bl2`|
-|Borderlands: The Pre-Sequel|`blps`|
-|Borderlands 3|`bl3`|
-|Borderlands 4|`bl4`|
-|Tiny Tina's Wonderlands|`ttw`|
-|Godfall|`gdfll`|
-
-
-#### **SHIFT_PLATFORM** (recommended)
-The platform(s) you want to redeem codes for
-
-Default: `epic steam`
-
-Example: `xbox` or `xbox ps`
-
-|Platform|Code|
-|---|---|
-|PC (Epic)|`epic`|
-|PC (Steam)|`steam`|
-|Xbox|`xboxlive`|
-|Playstation|`psn`|
-|Stadia|`stadia`|
-|Nintendo|`nintendo`|
+#### **SHIFT_PLATFORM** (deprecated)
+Previously accepted a space-separated list of platform codes. Replace it with explicit `--redeem game:platform` entries inside `SHIFT_ARGS`.
 
 
 #### **SHIFT_ARGS** (optional)
 Additional arguments to pass to the script. Combine them as needed; the examples mirror common workflows. Manual single-code runs reject the flags noted earlier.
 
-Default: `--schedule`
+Default (Docker image): `--redeem bl3:steam --schedule`
 
 Example: `--schedule --golden --limit 30`
 
@@ -400,8 +366,6 @@ Example: `--schedule --golden --limit 30`
 |`--golden`|Only redeem golden keys.|`--redeem bl3:steam --golden`|
 |`--non-golden`|Redeem non-golden keys (e.g., diamond).|`--redeem bl3:steam --non-golden`|
 |`--other`|Include cosmetics/unknown codes alongside golden/non-golden.|`--redeem bl3:steam --golden --other`|
-|`--games list`|Legacy mode: list of games (mutually exclusive with manual single-code mode).|`--games bl3 bl2`|
-|`--platforms list`|Legacy mode: list of platforms (mutually exclusive with manual single-code mode).|`--platforms steam epic`|
 |`--limit n`|Max golden keys to redeem (defaults to 200).|`--redeem bl3:steam --limit 25`|
 |`--schedule [hours]`|Keep checking every N hours (defaults to 2 if omitted). Not supported with manual single-code `--redeem`.|`--redeem bl3:steam --schedule 6`|
 |`-v`|Verbose logging (shows per-platform summary).|`--redeem bl3:steam -v`|
@@ -411,6 +375,7 @@ Example: `--schedule --golden --limit 30`
 |`--user value`|Specify SHiFT username via CLI (or use `SHIFT_USER`).|`--user someone@example.com`|
 |`--pass value`|Specify SHiFT password via CLI (prefer env/secret).|`--pass 's3cret'`|
 
+> 🚫 The old `--games`/`--platforms` flags have been removed. Always provide at least one `--redeem game:platform` mapping.
 > ℹ️ When setting `SHIFT_ARGS` in Docker or Kubernetes manifests, wrap the entire value in quotes (e.g., `"--redeem bl3:steam --schedule -v"`).
 
 #### **TZ** (optional)
