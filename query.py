@@ -623,8 +623,12 @@ class Database(ContextManager):
         self.commit()
 
     def saw_platform(self, short, name):
+        display_name = name.strip() if isinstance(name, str) else name
+        if not display_name:
+            display_name = short
         self.execute(
-            "INSERT into seen_platforms(key, name) VALUES (?, ?)", (short, name)
+            "INSERT into seen_platforms(key, name) VALUES (?, ?)",
+            (short, display_name),
         )
         self.commit()
 

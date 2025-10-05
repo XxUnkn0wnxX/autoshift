@@ -328,3 +328,19 @@ def extend_redeemed_keys_table(conn: sqlite3.Connection):
 
     conn.commit()
     return True
+
+
+@register(6)
+def backfill_seen_platform_names(conn: sqlite3.Connection):
+    """Ensure seen_platforms entries have a non-empty display name."""
+
+    c = conn.cursor()
+    c.execute(
+        """
+        UPDATE seen_platforms
+        SET name = key
+        WHERE name IS NULL OR TRIM(name) = ''
+        """
+    )
+    conn.commit()
+    return True
