@@ -124,7 +124,9 @@ def _extract_manual_request(args) -> Optional[tuple[str, Optional[Sequence[str]]
     if ":" in entry:
         code_part, platform_part = entry.split(":", 1)
         if not _looks_like_shift_code(code_part):
-            return None
+            raise ManualRedeemUsageError(
+                "Manual --redeem expects a SHiFT code followed by optional platforms (e.g. CODE-...:steam,epic)."
+            )
         normalized = normalize_shift_code(code_part)
         if not normalized:
             raise ManualRedeemUsageError(
@@ -134,7 +136,9 @@ def _extract_manual_request(args) -> Optional[tuple[str, Optional[Sequence[str]]
         return normalized, platform_filter
 
     if not _looks_like_shift_code(entry):
-        return None
+        raise ManualRedeemUsageError(
+            "Manual --redeem expects a SHiFT code in the format CODE-CODE-CODE-CODE-CODE (25 characters)."
+        )
 
     normalized = normalize_shift_code(entry)
     if not normalized:

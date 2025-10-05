@@ -171,9 +171,14 @@ def parse_redeem_mapping(args):
                 _L.error(
                     f"Invalid --redeem entry: {entry}. Use format game:platform[,platform...]"
                 )
-                continue
+                sys.exit(2)
             game, plats = entry.split(":", 1)
             mapping[game] = [p.strip() for p in plats.split(",") if p.strip()]
+            if not mapping[game]:
+                _L.error(
+                    f"Invalid --redeem entry: {entry}. At least one platform is required."
+                )
+                sys.exit(2)
         return mapping
     return None
 
