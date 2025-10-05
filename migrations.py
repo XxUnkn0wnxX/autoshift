@@ -211,3 +211,136 @@ def migrate_redeemed_table(conn):
     c.execute("DROP TABLE keys_old")
     conn.commit()
     return True
+
+
+@register(4)
+def add_failed_keys_table(conn: sqlite3.Connection):
+    """Add failed_keys outcome table and extend keys metadata."""
+
+    c = conn.cursor()
+
+    # Ensure failed_keys exists to persist negative outcomes per (key, platform)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS failed_keys (
+            key_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            status TEXT NOT NULL,
+            detail TEXT,
+            attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (key_id, platform),
+            FOREIGN KEY (key_id) REFERENCES keys(id)
+        )
+        """
+    )
+
+    # Add provenance column to keys if missing
+    c.execute("PRAGMA table_info(keys)")
+    existing_columns = {row[1] for row in c.fetchall()}
+    if "source" not in existing_columns:
+        c.execute("ALTER TABLE keys ADD COLUMN source TEXT")
+
+    conn.commit()
+    return True
+
+
+@register(5)
+def extend_redeemed_keys_table(conn: sqlite3.Connection):
+    """Add outcome metadata columns to redeemed_keys for parity with failed_keys."""
+
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(redeemed_keys)")
+    columns_info = c.fetchall()
+    column_names = {row[1] for row in columns_info}
+
+    if not column_names:
+        # Table missing; create a fresh one.
+        c.execute(
+            """
+            CREATE TABLE redeemed_keys (
+                key_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT,
+                attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (key_id, platform),
+                FOREIGN KEY (key_id) REFERENCES keys(id)
+            )
+            """
+        )
+        c.execute("DROP TABLE IF EXISTS redeemed_keys_old_v5")
+        conn.commit()
+        return True
+
+    # Detect legacy FK pointing to keys_old or missing columns
+    c.execute("PRAGMA foreign_key_list(redeemed_keys)")
+    fk_targets = {row[2] for row in c.fetchall()}
+    needs_rebuild = ("status" not in column_names) or ("detail" not in column_names)
+    needs_rebuild = needs_rebuild or ("attempted_at" not in column_names)
+    needs_rebuild = needs_rebuild or (fk_targets and "keys" not in fk_targets)
+
+    if needs_rebuild:
+        # Rebuild table to ensure clean schema and preserve existing data when available.
+        c.execute("ALTER TABLE redeemed_keys RENAME TO redeemed_keys_old_v5")
+        c.execute(
+            """
+            CREATE TABLE redeemed_keys (
+                key_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT,
+                attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (key_id, platform),
+                FOREIGN KEY (key_id) REFERENCES keys(id)
+            )
+            """
+        )
+
+        existing_cols = column_names
+        select_columns = ["key_id", "platform"]
+        status_expr = "COALESCE(status, 'SUCCESS')" if "status" in existing_cols else "'SUCCESS'"
+        select_columns.append(f"{status_expr} AS status")
+        detail_expr = "detail" if "detail" in existing_cols else "NULL"
+        select_columns.append(f"{detail_expr} AS detail")
+        attempted_expr = (
+            "COALESCE(attempted_at, CURRENT_TIMESTAMP)"
+            if "attempted_at" in existing_cols
+            else "CURRENT_TIMESTAMP"
+        )
+        select_columns.append(f"{attempted_expr} AS attempted_at")
+
+        select_sql = ", ".join(select_columns)
+        c.execute(
+            f"INSERT OR IGNORE INTO redeemed_keys (key_id, platform, status, detail, attempted_at)\n"
+            f"SELECT {select_sql} FROM redeemed_keys_old_v5"
+        )
+        c.execute("DROP TABLE redeemed_keys_old_v5")
+        conn.commit()
+        return True
+
+    # Columns exist but may be NULL; backfill defaults and ensure attempted_at present
+    if "status" in column_names:
+        c.execute("UPDATE redeemed_keys SET status = COALESCE(status, 'SUCCESS')")
+    if "attempted_at" in column_names:
+        c.execute(
+            "UPDATE redeemed_keys SET attempted_at = COALESCE(attempted_at, CURRENT_TIMESTAMP)"
+        )
+
+    conn.commit()
+    return True
+
+
+@register(6)
+def backfill_seen_platform_names(conn: sqlite3.Connection):
+    """Ensure seen_platforms entries have a non-empty display name."""
+
+    c = conn.cursor()
+    c.execute(
+        """
+        UPDATE seen_platforms
+        SET name = key
+        WHERE name IS NULL OR TRIM(name) = ''
+        """
+    )
+    conn.commit()
+    return True

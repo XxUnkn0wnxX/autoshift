@@ -109,26 +109,30 @@ known_games = SymmetricDict(
     {
         "bl1": "Borderlands: Game of the Year Edition",
         "bl2": "Borderlands 2",
+        "blps": "Borderlands: The Pre-Sequel",
         "bl3": "Borderlands 3",
         "bl4": "Borderlands 4",
-        "blps": "Borderlands: The Pre-Sequel",
         "ttw": "Tiny Tina's Wonderland",
         "gdfll": "Godfall",
     }
 )
 
+ALL_SUPPORTED_GAMES = ("bl1", "bl2", "blps", "bl3", "bl4", "ttw", "gdfll")
+
 ### platforms that are used to find the correct input values in the shift redemption forms
 known_platforms = SymmetricDict(
     {
-        "steam": "steam",
         "epic": "epic",
-        "psn": "playstation",
+        "steam": "steam",
         "xboxlive": "xbox",
+        "psn": "playstation",
         "nintendo": "nintendo",
         "stadia": "",  # this one could be a substring
         "universal": "universal",
     }
 )
+
+ALL_SUPPORTED_PLATFORMS = ("epic", "steam", "xboxlive", "psn", "nintendo", "stadia")
 
 
 spaces = re.compile(r"\s")
@@ -136,6 +140,16 @@ r_word_chars = re.compile(r"(the|[^a-z0-9])", re.IGNORECASE)
 lowercase_chars = re.compile(r"[a-z]")
 vowels = re.compile(r"[aeiou]", re.IGNORECASE)
 r_golden_keys = re.compile(r"^(\d+)?.*(gold|skelet).*", re.IGNORECASE)
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
 
 
 def print_banner(data):
@@ -229,11 +243,13 @@ class Key:
         "expires",
         "link",
         "expired",
+        "source",
     )
 
     def __init__(self, **kwargs):
         self.redeemed = False
         self.id = None
+        self.source = kwargs.get("source")
         self.set(**kwargs)
 
     def set(self, **kwargs):
@@ -354,11 +370,155 @@ class Database(ContextManager):
             return None
         _L.debug(f"== inserting {key.game} Key '{key.code}' for {key.platform} ==")
         self.execute(
-            "INSERT INTO keys(reward, code, platform, game) " "VALUES (?,?,?,?)",
-            (key.reward, key.code, key.platform, key.game),
+            "INSERT INTO keys(reward, code, platform, game, source) VALUES (?,?,?,?,?)",
+            (
+                getattr(key, "reward", None),
+                key.code,
+                key.platform,
+                key.game,
+                getattr(key, "source", None),
+            ),
         )
         self.commit()
         return key
+
+    def fetch_keys_for_code(self, code: str) -> list[Key]:
+        rows = self.execute(
+            """
+            SELECT * FROM keys
+            WHERE code = ?
+            ORDER BY id ASC
+            """,
+            (code,),
+        ).fetchall()
+        return [Key(**{col: row[col] for col in row.keys()}) for row in rows]
+
+    def ensure_key(
+        self,
+        *,
+        code: str,
+        game: str,
+        platform: str,
+        reward: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Key:
+        reward_value = reward.strip() if isinstance(reward, str) else reward
+        row = self.execute(
+            """
+            SELECT * FROM keys
+            WHERE code = ? AND game = ? AND platform = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (code, game, platform),
+        ).fetchone()
+
+        if row:
+            key = Key(**{col: row[col] for col in row.keys()})
+            updates = []
+            params = []
+
+            if reward_value and (not key.reward or key.reward == "Unknown"):
+                updates.append("reward = ?")
+                params.append(reward_value)
+            if source and not getattr(key, "source", None):
+                updates.append("source = ?")
+                params.append(source)
+
+            if updates:
+                params.append(key.id)
+                self.execute(
+                    f"UPDATE keys SET {', '.join(updates)} WHERE id = ?",
+                    params,
+                )
+                self.commit()
+                if reward_value:
+                    key.reward = reward_value
+                if source:
+                    key.source = source
+
+            return key
+
+        insert_reward = reward_value or "Unknown"
+        self.execute(
+            "INSERT INTO keys(reward, code, platform, game, source) VALUES (?,?,?,?,?)",
+            (insert_reward, code, platform, game, source),
+        )
+        self.commit()
+
+        created = self.execute(
+            """
+            SELECT * FROM keys
+            WHERE code = ? AND game = ? AND platform = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (code, game, platform),
+        ).fetchone()
+
+        if not created:
+            raise RuntimeError("Failed to persist key entry")
+
+        return Key(**{col: created[col] for col in created.keys()})
+
+    def fetch_outcomes_for_code(self, code: str):
+        redeemed_rows = self.execute(
+            """
+            SELECT keys.id AS key_id,
+                   keys.game,
+                   rk.platform,
+                   rk.status,
+                   rk.detail,
+                   rk.attempted_at
+            FROM redeemed_keys rk
+            JOIN keys ON keys.id = rk.key_id
+            WHERE keys.code = ?
+            """,
+            (code,),
+        ).fetchall()
+
+        redeemed = {}
+        for row in redeemed_rows:
+            game = row["game"]
+            platform = row["platform"]
+            if game is None or platform is None:
+                continue
+            redeemed[(game, platform)] = {
+                "key_id": row["key_id"],
+                "status": row["status"],
+                "detail": row["detail"],
+                "attempted_at": row["attempted_at"],
+            }
+
+        failed_rows = self.execute(
+            """
+            SELECT keys.id AS key_id,
+                   keys.game,
+                   fk.platform,
+                   fk.status,
+                   fk.detail,
+                   fk.attempted_at
+            FROM failed_keys fk
+            JOIN keys ON keys.id = fk.key_id
+            WHERE keys.code = ?
+            """,
+            (code,),
+        ).fetchall()
+
+        failed = {}
+        for row in failed_rows:
+            game = row["game"]
+            platform = row["platform"]
+            if game is None or platform is None:
+                continue
+            failed[(game, platform)] = {
+                "key_id": row["key_id"],
+                "status": row["status"],
+                "detail": row["detail"],
+                "attempted_at": row["attempted_at"],
+            }
+
+        return redeemed, failed
 
     def get_keys(self, platform, game, all_keys=False):
         """Get all (unredeemed) keys of given platform and game"""
@@ -409,11 +569,52 @@ class Database(ContextManager):
                 ret.append(k)
         return num, ret
 
-    def set_redeemed(self, key):
-        # Mark as redeemed for this key id and platform
+    def set_redeemed(
+        self,
+        key: Key,
+        status: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        if getattr(key, "id", None) is None:
+            raise ValueError("Cannot record redeemed outcome without a persisted key id")
+
         self.execute(
-            "INSERT OR IGNORE INTO redeemed_keys (key_id, platform) VALUES (?, ?)",
+            """
+            INSERT INTO redeemed_keys (key_id, platform, status, detail, attempted_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key_id, platform) DO UPDATE SET
+                status = excluded.status,
+                detail = excluded.detail,
+                attempted_at = excluded.attempted_at
+            """,
+            (key.id, key.platform, status, detail),
+        )
+        self.execute(
+            "DELETE FROM failed_keys WHERE key_id = ? AND platform = ?",
             (key.id, key.platform),
+        )
+        self.commit()
+
+    def record_failure(
+        self,
+        key: Key,
+        platform: str,
+        status: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        if getattr(key, "id", None) is None:
+            raise ValueError("Cannot record failure without a persisted key id")
+
+        self.execute(
+            """
+            INSERT INTO failed_keys (key_id, platform, status, detail, attempted_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key_id, platform) DO UPDATE SET
+                status = excluded.status,
+                detail = excluded.detail,
+                attempted_at = excluded.attempted_at
+            """,
+            (key.id, platform, status, detail),
         )
         self.commit()
 
@@ -422,8 +623,12 @@ class Database(ContextManager):
         self.commit()
 
     def saw_platform(self, short, name):
+        display_name = name.strip() if isinstance(name, str) else name
+        if not display_name:
+            display_name = short
         self.execute(
-            "INSERT into seen_platforms(key, name) VALUES (?, ?)", (short, name)
+            "INSERT into seen_platforms(key, name) VALUES (?, ?)",
+            (short, display_name),
         )
         self.commit()
 
@@ -496,22 +701,16 @@ def parse_shift_orcicorn():
         _L.error("Invalid response. Please contact the developer @ github.com/fabbi")
         return None
 
-    # Remove expired keys by default (by creating a new dict without them)
-    valid_codes = []
-    for code_data in data["codes"]:
-        if code_data["expired"] == True:
-            continue
-        else:
-            valid_codes.append(code_data)
-
     if parse_shift_orcicorn.first_parse:
         parse_shift_orcicorn.first_parse = False
         print_banner(data)
 
-    for code_data in valid_codes:
+    for code_data in data.get("codes", []):
         # Normalize reward: treat missing/blank/'Unknown' as "Unknown"
         rv = (code_data.get("reward") or "").strip()
         code_data["reward"] = "Unknown" if (rv == "" or rv.lower() == "unknown") else rv
+
+        code_source = code_data.get("source") or SHIFT_SOURCE
 
         keys: Iterable[Key] = [Key(**code_data)]
 
@@ -534,6 +733,10 @@ def parse_shift_orcicorn():
         for key in keys:
             key.set(game=get_short_game_key(key.game))
             key.set(platform=get_short_platform_key(key.platform))
+            key.set(source=code_source)
+            # Ensure expired flag is boolean for downstream consumers
+            if hasattr(key, "expired"):
+                key.set(expired=_coerce_bool(getattr(key, "expired", False)))
 
         yield from keys
 

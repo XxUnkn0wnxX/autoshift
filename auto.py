@@ -31,10 +31,19 @@ if "--profile" in sys.argv:
     if i + 1 < len(sys.argv):
         os.environ["AUTOSHIFT_PROFILE"] = sys.argv[i + 1]
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from common import _L, DEBUG, INFO, data_path, DATA_DIR
 from m_redeem import maybe_handle_manual_redeem
+from redeem_logic import (
+    RedemptionCandidate,
+    RedemptionPlan,
+    build_redemption_plan,
+    format_status_detail,
+    normalize_requested_platforms,
+    normalize_shift_code,
+)
+from shift import Status
 
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
@@ -58,30 +67,96 @@ under certain conditions; see LICENSE for details.
 def redeem(key: "Key"):
     """Redeem key and set as redeemed if successful"""
     import query
-    from shift import Status
 
     _L.info(f"Trying to redeem {key.reward} ({key.code}) on {key.platform}")
     # use query.known_games (query imported above) instead of relying on a global name
     status = client.redeem(key.code, query.known_games[key.game], key.platform)
     _L.debug(f"Status: {status}")
 
+    detail = format_status_detail(status, key)
+
     # set redeemed status only for positive outcomes
     if status in (Status.SUCCESS, Status.REDEEMED):
-        query.db.set_redeemed(key)
+        status_label = getattr(status, "name", "SUCCESS")
+        query.db.set_redeemed(key, status_label, detail)
 
     # notify user
-    try:
-        # this may fail if there are other `{<something>}` in the string..
-        msg = status.msg.format(**locals())
-    except Exception:
-        msg = status.msg
-
+    msg = detail
     if status == Status.INVALID:
         msg = f"Cannot redeem on {key.platform}"
 
     _L.info("  " + msg)
 
-    return status == Status.SUCCESS
+    return status in (Status.SUCCESS, Status.REDEEMED)
+
+
+def _load_plan(plan_cache: dict[str, RedemptionPlan], code: str, bypass_fail: bool) -> RedemptionPlan:
+    normalized = normalize_shift_code(code) or code
+    plan = plan_cache.get(normalized)
+    if plan is None:
+        plan = build_redemption_plan(
+            normalized,
+            normalize_requested_platforms(None),
+            bypass_fail=bypass_fail,
+        )
+        plan_cache[normalized] = plan
+    return plan
+
+
+def _find_candidate(
+    plan: RedemptionPlan, game: str, platform: str
+) -> tuple[Optional[RedemptionCandidate], Optional[str]]:
+    for candidate in plan.attempts:
+        if candidate.game == game and candidate.platform == platform:
+            return candidate, "attempt"
+    for candidate in plan.skipped:
+        if candidate.game == game and candidate.platform == platform:
+            return candidate, "skip"
+    return None, None
+
+
+def _format_pair(code: str, candidate: RedemptionCandidate) -> str:
+    return f"{code} -> {candidate.platform}:{candidate.game}"
+
+
+def _failure_label_for_status(status: Status) -> str:
+    if status == Status.EXPIRED:
+        return "EXPIRED"
+    if status == Status.INVALID:
+        return "INVALID"
+    if status == Status.SLOWDOWN:
+        return "RATELIMIT"
+    if status == Status.TRYLATER:
+        return "TRYLATER"
+    if status == Status.REDIRECT:
+        return "NETWORK_ERROR"
+    if status in (Status.NONE, Status.UNKNOWN):
+        return "UNKNOWN_ERROR"
+    return getattr(status, "name", "UNKNOWN_ERROR")
+
+
+def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
+    return candidate.key.copy().set(
+        platform=candidate.platform,
+        game=candidate.game,
+        code=candidate.code,
+    )
+
+
+def _log_auto_skip(code: str, candidate: RedemptionCandidate, bypass_fail: bool) -> None:
+    label = _format_pair(code, candidate)
+    if candidate.skip_reason == "redeemed":
+        _L.info(f"{label}: previously recorded success; skipping remote call.")
+    elif candidate.skip_reason == "failed":
+        reason = candidate.previously_failed or "UNKNOWN"
+        suffix = "" if bypass_fail else " Use --bypass-fail to retry."
+        _L.info(
+            f"{label}: previously recorded failure ({reason}); skipping remote call.{suffix}"
+        )
+    elif candidate.skip_reason == "expired":
+        _L.info(f"{label}: source expired; recording EXPIRED without remote call.")
+    else:
+        _L.info(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
 
 
 def parse_redeem_mapping(args):
@@ -96,9 +171,14 @@ def parse_redeem_mapping(args):
                 _L.error(
                     f"Invalid --redeem entry: {entry}. Use format game:platform[,platform...]"
                 )
-                continue
+                sys.exit(2)
             game, plats = entry.split(":", 1)
             mapping[game] = [p.strip() for p in plats.split(",") if p.strip()]
+            if not mapping[game]:
+                _L.error(
+                    f"Invalid --redeem entry: {entry}. At least one platform is required."
+                )
+                sys.exit(2)
         return mapping
     return None
 
@@ -246,23 +326,25 @@ def setup_argparser():
         action="store_true",
         help="Also redeem generic non-key codes (Unknown/cosmetics). Without this, Codes are excluded when using --golden or --non-golden.",
     )
-    # Provide static choices so argparse can validate without importing query/db
-    parser.add_argument(
-        "--games",
-        type=str,
-        required=False,
-        choices=games,
-        nargs="+",
-        help=("Games you want to query SHiFT keys for"),
-    )
-    parser.add_argument(
-        "--platforms",
-        type=str,
-        required=False,
-        choices=platforms,
-        nargs="+",
-        help=("Platforms you want to query SHiFT keys for"),
-    )
+    # DEV NOTE (2025-10-05): Legacy --games/--platforms mode is intentionally disabled while we
+    # align bulk logging with the manual pipeline. Leaving the argument definitions commented out
+    # prevents argparse from accepting them, but preserves the original code for future reference.
+    # parser.add_argument(
+    #     "--games",
+    #     type=str,
+    #     required=False,
+    #     choices=games,
+    #     nargs="+",
+    #     help=("Games you want to query SHiFT keys for"),
+    # )
+    # parser.add_argument(
+    #     "--platforms",
+    #     type=str,
+    #     required=False,
+    #     choices=platforms,
+    #     nargs="+",
+    #     help=("Platforms you want to query SHiFT keys for"),
+    # )
     # DEV NOTE: Document both mapping and manual flows inline so --help stays truthful.
     parser.add_argument(
         "--redeem",
@@ -272,8 +354,14 @@ def setup_argparser():
             Specify redemption targets.
             Mapping mode: bl3:steam,epic bl2:epic
             Manual mode: SHiFT code or code:platform[,platform...] to filter targets.
+            Required for bulk runs; legacy --games/--platforms flags are disabled.
             Manual mode cannot be combined with --schedule.
         """),
+    )
+    parser.add_argument(
+        "--bypass-fail",
+        action="store_true",
+        help="Ignore failed_keys/expiry short-circuits; attempt pairs again and update outcomes.",
     )
     parser.add_argument(
         "--limit",
@@ -335,6 +423,12 @@ def main(args):
     if shift_src:
         query.set_shift_source(shift_src)
 
+    if not getattr(args, "redeem", None):
+        _L.error(
+            "--redeem is now required. Legacy --games/--platforms mode is disabled because --redeem provides the improved logging pipeline."
+        )
+        sys.exit(2)
+
     with db:
         if not client:
             # DEV NOTE: Password/credential source detection & debug logging
@@ -378,33 +472,48 @@ def main(args):
         if maybe_handle_manual_redeem(args, client, redeem):
             return
 
+        bypass_fail = bool(getattr(args, "bypass_fail", False))
+
         redeem_mapping = parse_redeem_mapping(args)
-        if redeem_mapping:
-            # New mapping mode
-            games = list(redeem_mapping.keys())
-            platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
-            _L.info("Redeem mapping (game: platforms):")
-            for game, plats in redeem_mapping.items():
-                _L.info(f"  {game}: {', '.join(plats)}")
-        else:
-            # Legacy mode
-            games = args.games or list(known_games.keys())
-            platforms = args.platforms or list(known_platforms)
-            _L.warning(
-                "You are using the legacy --games/--platforms format. "
-                "Prefer --redeem bl3:steam,epic bl2:epic for more control."
+        if not redeem_mapping:
+            _L.error(
+                "Bulk mode requires --redeem mapping. Legacy --games/--platforms flow is disabled."
             )
-            _L.info("Redeeming all of these games/platforms combinations:")
-            _L.info(f"  Games: {', '.join(games)}")
-            _L.info(f"  Platforms: {', '.join(platforms)}")
+            sys.exit(2)
+
+        # New mapping mode
+        games = list(redeem_mapping.keys())
+        platforms = sorted(set(p for plats in redeem_mapping.values() for p in plats))
+        _L.info("Redeem mapping (game: platforms):")
+        for game, plats in redeem_mapping.items():
+            _L.info(f"  {game}: {', '.join(plats)}")
+
+        # DEV NOTE (2025-10-05): The legacy fallback that relied on --games/--platforms is kept below
+        # for posterity but intentionally commented out. Do not delete until we confirm we will never
+        # need to revive the old interface.
+        # else:
+        #     games = args.games or list(known_games.keys())
+        #     platforms = args.platforms or list(known_platforms)
+        #     _L.warning(
+        #         "You are using the legacy --games/--platforms format. "
+        #         "Prefer --redeem bl3:steam,epic bl2:epic for more control."
+        #     )
+        #     _L.info("Redeeming all of these games/platforms combinations:")
+        #     _L.info(f"  Games: {', '.join(games)}")
+        #     _L.info(f"  Platforms: {', '.join(platforms)}")
 
         all_keys = query_keys_with_mapping(redeem_mapping, games, platforms)
+
+        plan_cache: dict[str, RedemptionPlan] = {}
+        processed_pairs: set[tuple[str, str, str]] = set()
 
         _L.info("Trying to redeem now.")
 
         # Track what actually got redeemed across the whole run
         any_keys_redeemed = False
         any_codes_redeemed = False
+
+        last_end_label: Optional[str] = None
 
         # now redeem
         for game in all_keys.keys():
@@ -672,6 +781,36 @@ def main(args):
                             continue
                     # else: default mode allows all
 
+                    normalized_code = normalize_shift_code(key.code) or key.code
+                    pair_id = (normalized_code, game, platform)
+                    plan = _load_plan(plan_cache, normalized_code, bypass_fail)
+                    candidate, disposition = _find_candidate(plan, game, platform)
+                    if candidate is None:
+                        _L.debug(
+                            f"No candidate metadata for {normalized_code} on {platform}:{game}; skipping."
+                        )
+                        continue
+                    if disposition == "skip":
+                        _log_auto_skip(normalized_code, candidate, bypass_fail)
+                        if (
+                            candidate.skip_reason == "expired"
+                            and candidate.should_record_preclassification
+                        ):
+                            attempt_key = _key_for_candidate(candidate)
+                            query.db.record_failure(
+                                attempt_key,
+                                candidate.platform,
+                                candidate.preclassified_status or "EXPIRED",
+                                f"Preclassified expiry from source metadata ({candidate.reward})",
+                            )
+                            candidate.should_record_preclassification = False
+                        processed_pairs.add(pair_id)
+                        continue
+                    if pair_id in processed_pairs:
+                        continue
+                    attempt_key = _key_for_candidate(candidate)
+                    processed_pairs.add(pair_id)
+
                     # Per-item progress line
                     if _is_key_reward(key):
                         k_index += 1
@@ -681,10 +820,32 @@ def main(args):
                         label = f"Code #{c_index}/{queue_codes_len}"
                     _L.info(f"{label} for {game} on {platform}")
 
-                    # Attempt redeem
-                    redeemed = redeem(key)
+                    slowdown_retry = False
+                    while True:
+                        redeemed = redeem(attempt_key)
+                        status = getattr(client, "last_status", Status.NONE)
+                        if status == Status.SLOWDOWN and not slowdown_retry:
+                            _L.info(
+                                "Auto redeem hit SLOWDOWN; sleeping 60s before retrying same code."
+                            )
+                            slowdown_retry = True
+                            sleep(60)
+                            continue
+                        if status == Status.SLOWDOWN:
+                            _L.info(
+                                "Auto redeem hit SLOWDOWN twice; treating as TRY LATER and ending run."
+                            )
+                            status = Status.TRYLATER
+                            client.last_status = status
+                            redeemed = False
+                        break
+
+                    detail = format_status_detail(status, attempt_key)
 
                     if redeemed:
+                        candidate.previously_redeemed = True
+                        candidate.previously_failed = None
+                        candidate.failure_detail = None
                         # Update global redeemed trackers
                         if _is_key_reward(key):
                             any_keys_redeemed = True
@@ -717,9 +878,19 @@ def main(args):
                                 else:
                                     end_label = "keys & codes"
                             _L.info(f"No more {end_label} left!")
+                            last_end_label = end_label
                     else:
+                        failure_label = _failure_label_for_status(status)
+                        query.db.record_failure(
+                            attempt_key,
+                            candidate.platform,
+                            failure_label,
+                            detail,
+                        )
+                        candidate.previously_failed = failure_label
+                        candidate.failure_detail = detail
                         # don't spam if we reached the hourly limit
-                        if client.last_status == Status.TRYLATER:
+                        if status == Status.TRYLATER:
                             return
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
@@ -735,7 +906,8 @@ def main(args):
                 final_label = "codes"
             else:
                 final_label = "keys & codes"
-        _L.info(f"No more {final_label} left!")
+        if last_end_label != final_label:
+            _L.info(f"No more {final_label} left!")
 
 
 if __name__ == "__main__":
