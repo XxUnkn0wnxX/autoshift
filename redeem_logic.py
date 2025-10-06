@@ -35,6 +35,7 @@ class RedemptionCandidate:
     preclassified_status: Optional[str] = None
     skip_reason: Optional[str] = None
     previously_redeemed: bool = False
+    previously_redeemed_status: Optional[str] = None
     previously_failed: Optional[str] = None
     failure_detail: Optional[str] = None
     should_record_preclassification: bool = False
@@ -245,6 +246,7 @@ def _apply_skip_logic(
         success = redeemed_map.get(pair)
         if success:
             candidate.previously_redeemed = True
+            candidate.previously_redeemed_status = success.get("status")
             candidate.skip_reason = "redeemed"
             skipped.append(candidate)
             continue

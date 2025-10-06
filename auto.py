@@ -147,7 +147,10 @@ def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
 def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool) -> None:
     label = _format_pair(code, candidate)
     if candidate.skip_reason == "redeemed":
-        _L.debug(f"{label}: previously recorded success; skipping remote call.")
+        status = candidate.previously_redeemed_status or "UNKNOWN"
+        _L.debug(
+            f"{label}: previously recorded success ({status}); skipping remote call."
+        )
     elif candidate.skip_reason == "failed":
         reason = candidate.previously_failed or "UNKNOWN"
         _L.debug(f"{label}: previously recorded failure ({reason}); skipping remote call.")
