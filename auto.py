@@ -885,7 +885,7 @@ def main(args):
                         status = getattr(client, "last_status", Status.NONE)
                         if status == Status.SLOWDOWN and not slowdown_retry:
                             _L.info(
-                                "Auto redeem hit SLOWDOWN; sleeping 60s before retrying same code."
+                                f"Auto redeem hit SLOWDOWN; sleeping {SLEEP_TIMER}s before retrying same code."
                             )
                             slowdown_retry = True
                             sleep(SLEEP_TIMER)
