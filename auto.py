@@ -49,7 +49,7 @@ from shift import Status
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
 STATIC_PLATFORMS = ["epic", "steam", "xboxlive", "psn", "nintendo", "stadia"]
-SLEEP_TIMER = 60
+SLEEP_TIMER = int(os.getenv("SLEEP_TIMER", "60"))
 
 if TYPE_CHECKING:
     from query import Key
