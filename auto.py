@@ -783,7 +783,9 @@ def main(args):
                         if client.last_status == Status.SLOWDOWN:
                             _L.info("Slowing down a bit..")
                         else:
-                            _L.info("Trying to prevent a 'too many requests'-block.")
+                            _L.info(
+                                f"Trying to prevent a 'too many requests'-block. [{SLEEP_TIMER}s]"
+                            )
                         sleep(SLEEP_TIMER)
 
                     # Skip items that won't be attempted in this mode (belt-and-braces)
