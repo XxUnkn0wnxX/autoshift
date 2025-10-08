@@ -541,15 +541,43 @@ def main(args):
                 #   - Non-Golden Keys: reward contains 'key' but not golden (e.g., Diamond keys)
                 #   - Codes: everything else (Unknown/cosmetics/etc.)
                 # This powers mode filtering and the per-category limit math.
-                def _is_key_reward(k):
+                def _reward_text(obj) -> str:
+                    if isinstance(obj, str):
+                        return obj or ""
                     try:
-                        rv = (getattr(k, "reward", "") or "").lower()
-                        return "key" in rv
+                        return getattr(obj, "reward", "") or ""
                     except Exception:
-                        return False
+                        return ""
 
-                def _is_golden(k):
-                    return bool(r_golden_keys.match((getattr(k, "reward", "") or "")))
+                def _is_key_reward(obj) -> bool:
+                    return "key" in _reward_text(obj).lower()
+
+                def _is_golden(obj) -> bool:
+                    return bool(r_golden_keys.match(_reward_text(obj)))
+
+                def _load_failed_totals(game_key: str, platform_key: str) -> tuple[int, int, int]:
+                    rows = query.db.execute(
+                        """
+                        SELECT keys.reward
+                        FROM failed_keys fk
+                        JOIN keys ON keys.id = fk.key_id
+                        WHERE keys.game = ?
+                          AND ((? IS NULL AND fk.platform IS NULL) OR fk.platform = ?)
+                        """,
+                        (game_key, platform_key, platform_key),
+                    ).fetchall()
+                    g_total = 0
+                    ng_total = 0
+                    c_total = 0
+                    for row in rows:
+                        reward_value = row["reward"] or ""
+                        if _is_golden(reward_value):
+                            g_total += 1
+                        elif _is_key_reward(reward_value):
+                            ng_total += 1
+                        else:
+                            c_total += 1
+                    return g_total, ng_total, c_total
 
                 # Category lists (Codes are anything that is not a *key*; Unknowns land here)
                 golden_list        = [k for k in t_keys if _is_golden(k)]
@@ -967,14 +995,15 @@ def main(args):
                             failed_codes += 1
                         # don't abort the entire run on TRY LATER; keep processing remaining queue
 
-                ignored_total = ignored_redeemed_g + ignored_redeemed_ng + ignored_redeemed_codes
-                if ignored_total:
-                    _L.info(
-                        f"\t{ignored_redeemed_g} Golden Keys, {ignored_redeemed_ng} Non-Golden Keys, {ignored_redeemed_codes} Codes IGNORED (already redeemed)."
-                    )
-
+                # Always show ignored counts so mode-specific runs still report what was skipped.
                 _L.info(
-                    f"\t{failed_g} Golden Keys, {failed_ng} Non-Golden Keys, {failed_codes} Codes FAILED."
+                    f"\t{ignored_redeemed_g} Golden Keys, {ignored_redeemed_ng} Non-Golden Keys, {ignored_redeemed_codes} Codes IGNORED (already redeemed)."
+                )
+
+                # Pull failure totals from the persisted failed_keys table (includes current session updates).
+                total_failed_g, total_failed_ng, total_failed_codes = _load_failed_totals(game, platform)
+                _L.info(
+                    f"\t{total_failed_g} Golden Keys, {total_failed_ng} Non-Golden Keys, {total_failed_codes} Codes FAILED."
                 )
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
