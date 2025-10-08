@@ -160,14 +160,14 @@ def _log_auto_skip(
     bucket = _bucket_label()
 
     if candidate.skip_reason == "redeemed":
-        status = candidate.previously_redeemed_status or "UNKNOWN"
+        status = (candidate.previously_redeemed_status or "UNKNOWN").upper()
         reward = (getattr(candidate, "reward", "") or "Unknown").strip()
-        detail = f"IGNORED {bucket} ({reward}, status {status}): {candidate.code or code}"
+        detail = f"IGNORED {bucket} ({reward}) [{status}]: {candidate.code or code}"
         return "ignored", detail
     elif candidate.skip_reason == "failed":
-        reason = candidate.previously_failed or "UNKNOWN"
+        reason = (candidate.previously_failed or "UNKNOWN").upper()
         reward = (getattr(candidate, "reward", "") or "Unknown").strip()
-        detail = f"FAILED {bucket} ({reward}, status {reason}): {candidate.code or code}"
+        detail = f"FAILED {bucket} ({reward}) [{reason}]: {candidate.code or code}"
         return "failed", detail
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
