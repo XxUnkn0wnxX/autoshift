@@ -232,9 +232,10 @@ def _apply_skip_logic(
     redeemed_map, failed_map = query.db.fetch_outcomes_for_code(normalized_code)
     now = _dt.datetime.now(UTC)
 
-    trylater_attempts: List[RedemptionCandidate] = []
+    retryable_attempts: List[RedemptionCandidate] = []
     attempts: List[RedemptionCandidate] = []
     skipped: List[RedemptionCandidate] = []
+    retry_statuses = {"TRYLATER", "RATELIMIT", "NETWORK_ERROR"}
 
     for candidate in candidates:
         pair = (candidate.game, candidate.platform)
@@ -244,9 +245,9 @@ def _apply_skip_logic(
             candidate.previously_failed = failure.get("status")
             candidate.failure_detail = failure.get("detail")
             failure_status = (candidate.previously_failed or "").upper()
-            if failure_status == "TRYLATER":
+            if failure_status in retry_statuses:
                 candidate.skip_reason = None
-                trylater_attempts.append(candidate)
+                retryable_attempts.append(candidate)
                 continue
 
         success = redeemed_map.get(pair)
@@ -277,7 +278,7 @@ def _apply_skip_logic(
         candidate.skip_reason = None
         attempts.append(candidate)
 
-    return trylater_attempts + attempts, skipped
+    return retryable_attempts + attempts, skipped
 
 
 def _upsert_candidate(

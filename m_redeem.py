@@ -312,9 +312,10 @@ def _redeem_candidates(
             f"Trying to redeem {candidate.reward} ({candidate.code}) "
             f"on {candidate.platform} for {candidate.game}"
         )
-        if (candidate.previously_failed or "").upper() == "TRYLATER":
+        previous_status = (candidate.previously_failed or "").upper()
+        if previous_status in {"TRYLATER", "RATELIMIT", "NETWORK_ERROR"}:
             _L.info(
-                "\t-> Retrying now because SHiFT responded with 'TRY LATER' last time."
+                f"\t-> Retrying now because of Status: '{previous_status}' last run."
             )
             hit_try_later = True
 

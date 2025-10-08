@@ -869,10 +869,11 @@ def main(args):
                     if pair_id in processed_pairs:
                         continue
                     attempt_key = _key_for_candidate(candidate)
-                    if (candidate.previously_failed or "").upper() == "TRYLATER":
+                    previous_status = (candidate.previously_failed or "").upper()
+                    if previous_status in {"TRYLATER", "RATELIMIT", "NETWORK_ERROR"}:
                         label = _format_pair(normalized_code, candidate)
                         _L.info(
-                            f"\t{label}: retrying first because SHiFT asked to 'TRY LATER' last run."
+                            f"\t{label}: retrying first because of Status: '{previous_status}' last run."
                         )
                     processed_pairs.add(pair_id)
 
