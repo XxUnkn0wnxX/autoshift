@@ -230,6 +230,9 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
         for g in games:
             all_keys[g] = {p: [] for p in platforms}
 
+    if _L.isEnabledFor(DEBUG):
+        _L.debug("Staging raw key entries per platform (duplicates still visible until summary).")
+
     for g, g_keys in groupby(sorted(new_keys, key=_g), _g):
         if redeem_mapping:
             if g not in redeem_mapping:
