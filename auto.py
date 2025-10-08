@@ -237,23 +237,69 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
                     _L.debug(f"Platform: {p}, {key}")
                     all_keys[g][p].append(temp_key.copy().set(platform=p))
 
+    def _count_reward_rows(rows):
+        golden = 0
+        non_golden = 0
+        for row in rows:
+            reward_value = (row["reward"] or "").strip()
+            if query.r_golden_keys.match(reward_value):
+                golden += 1
+            elif "key" in reward_value.lower():
+                non_golden += 1
+        codes = max(0, len(rows) - golden - non_golden)
+        return golden, non_golden, codes
+
+    def _split_summary_rows(game_key: str, platform_key: str):
+        rows = query.db.execute(
+            """
+            SELECT keys.id,
+                   keys.code,
+                   keys.reward,
+                   keys.platform
+            FROM keys
+            WHERE keys.game = ?
+              AND (keys.platform = ? OR keys.platform = 'universal')
+              AND keys.id NOT IN (SELECT key_id FROM redeemed_keys)
+            ORDER BY keys.id DESC
+            """,
+            (game_key, platform_key),
+        ).fetchall()
+
+        by_code = {}
+        for row in rows:
+            code = row["code"]
+            existing = by_code.get(code)
+            if existing is None:
+                by_code[code] = row
+                continue
+            if existing["platform"] == "universal" and row["platform"] == platform_key:
+                by_code[code] = row
+
+        platform_rows = []
+        universal_rows = []
+        for row in by_code.values():
+            if row["platform"] == "universal":
+                universal_rows.append(row)
+            else:
+                platform_rows.append(row)
+        return platform_rows, universal_rows
+
     # Always print info for all requested game/platform pairs
-    # DEV NOTE: This summary mirrors the new About-to-redeem breakdown: Golden vs Non-Golden vs Other Codes.
-    #          It replaces the old 'golden-only' summary so users can see per-category counts up front.
+    # DEV NOTE: This summary now distinguishes platform-specific totals from universal-only leftovers so the lead-in
+    #           matches the failure/ignored breakdown while still surfacing cross-platform stock.
     for g in all_keys:
         for p in all_keys[g]:
-            keys_list = [k for k in all_keys[g][p] if not getattr(k, "redeemed", False)]
-            # Split into Golden, non-golden Keys, and Codes to mirror the "About to redeem" summary
-            golden_count = sum(1 for k in keys_list if query.r_golden_keys.match((k.reward or "")))
-            non_golden_count = sum(
-                1
-                for k in keys_list
-                if ("key" in (k.reward or "").lower()) and not query.r_golden_keys.match((k.reward or ""))
-            )
-            codes_count = max(0, len(keys_list) - golden_count - non_golden_count)
+            platform_rows, universal_rows = _split_summary_rows(g, p)
+            golden_count, non_golden_count, codes_count = _count_reward_rows(platform_rows)
             _L.info(
                 f"You have {golden_count} Golden Keys, {non_golden_count} Non-Golden Keys, {codes_count} Other Codes for {g} to redeem for {p}"
             )
+
+            if universal_rows:
+                u_golden, u_non_golden, u_codes = _count_reward_rows(universal_rows)
+                _L.info(
+                    f"\t+{u_golden} Golden Keys, +{u_non_golden} Non-Golden Keys, +{u_codes} Other Codes stored as universal (available for other platforms)."
+                )
 
     return all_keys
 
