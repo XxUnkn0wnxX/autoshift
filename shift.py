@@ -29,6 +29,8 @@ import bs4
 import requests
 from bs4 import BeautifulSoup as BSoup
 from requests.models import Response
+from requests.cookies import RequestsCookieJar  # DEV Notes: Ported cookie jar restore support from Fabbi
+import time  # DEV Notes: Ported wait-loop timing from Fabbi's build
 
 from common import _L, DIRNAME
 import os  # required for fallback data_path and cookie path handling
@@ -155,26 +157,39 @@ def input_pw(qry):
 
 class ShiftClient:
     def __init__(self, user: str = None, pw: str = None):
-        from os import path
-
         self.client = requests.session()
         self.last_status = Status.NONE
         # profile-aware cookie path
         self.cookie_file = data_path(".cookies.save")
-        # try to load cookies. Query for login data if not present
-        if not self.__load_cookie():
-            print("First time usage: Login to your SHiFT account...")
-            if not user:
-                user = input("Username: ")
-            if not pw:
-                pw = input_pw("Password: ")
+        # DEV Notes: Ported cookie bootstrap flow from Fabbi (fc1f984...) while keeping requests session
+        cookies_loaded = self.__load_cookie()
+        if cookies_loaded and not user and not pw:
+            if self.__check_login():
+                _L.debug("Loaded valid SHiFT cookies; skipping login prompt.")
+                return
+            _L.debug("Stored SHiFT cookies failed login check; re-authenticating.")
 
-            self.__login(user, pw)
-            if self.__save_cookie():
-                _L.info("Login Successful")
-            else:
-                _L.error("Couldn't login. Are your credentials correct?")
-                exit(0)
+        if not user:
+            print("First time usage: Login to your SHiFT account...")
+            user = input("Username: ")
+        if not pw:
+            pw = input_pw("Password: ")
+
+        self.__login(user, pw)
+        if self.__save_cookie():
+            _L.info("Login Successful")
+        else:
+            _L.error("Couldn't login. Are your credentials correct?")
+            exit(0)
+
+    # DEV Notes: Ported login verification helper from Fabbi's build
+    def __check_login(self) -> bool:
+        try:
+            response = self.client.get(f"{base_url}/rewards")
+        except Exception as exc:
+            _L.debug(f"Login check failed: {exc}")
+            return False
+        return response.status_code == 200 and "Sign Out" in response.text
 
     def __save_cookie(self) -> bool:
         """Make ./data folder if not present"""
@@ -184,12 +199,18 @@ class ShiftClient:
             mkdir(path.dirname(self.cookie_file))
 
         """Save cookie for auto login"""
+        # DEV Notes: Ported cookie pruning + structured save from Fabbi (fc1f984...)
+        try:
+            self.client.cookies.clear_expired_cookies()
+        except AttributeError:
+            _L.debug("Cookie jar does not support clear_expired_cookies(); skipping prune.")
+
+        if not any(cookie.name == "si" for cookie in self.client.cookies):
+            return False
+
         with open(self.cookie_file, "wb") as f:
-            for cookie in self.client.cookies:
-                if cookie.name == "si":
-                    pickle.dump(self.client.cookies, f)
-                    return True
-        return False
+            pickle.dump(self.client.cookies._cookies, f)
+        return True
 
     def __load_cookie(self) -> bool:
         """Check if there is a saved cookie and load it."""
@@ -197,11 +218,27 @@ class ShiftClient:
 
         if not path.exists(self.cookie_file):
             return False
-        with open(self.cookie_file, "rb") as f:
-            content = f.read()
-            if not content:
-                return False
-            self.client.cookies.update(pickle.loads(content))
+        # DEV Notes: Ported cookie jar restore logic from Fabbi (fc1f984...) with backwards compatibility
+        try:
+            with open(self.cookie_file, "rb") as f:
+                content = pickle.load(f)
+        except Exception as exc:
+            _L.error(f"Could not load cookies. Re-login required ({exc})")
+            return False
+
+        if not content:
+            return False
+
+        if isinstance(content, RequestsCookieJar):
+            jar = content
+        elif isinstance(content, dict):
+            jar = RequestsCookieJar()
+            jar._cookies = content
+        else:
+            _L.debug(f"Unknown cookie payload type: {type(content)}")
+            return False
+
+        self.client.cookies = jar
         return True
 
     def redeem(self, code: str, game: str, platform: str) -> Status:
@@ -217,6 +254,8 @@ class ShiftClient:
                 status = Status.EXPIRED
             elif "not available" in form_data:
                 status = Status.INVALID
+            elif "does not exist" in form_data:
+                status = Status.INVALID  # DEV Notes: Ported validation clause from Fabbi (baefd72...)
             elif "already been redeemed" in form_data:
                 status = Status.REDEEMED
             else:
@@ -289,7 +328,7 @@ class ShiftClient:
     ]:
         """Get Form data for code redemption"""
 
-        the_url = f"{base_url}/code_redemptions/new"
+        the_url = f"{base_url}/rewards"  # DEV Notes: Ported CSRF source adjustment from Fabbi (f957ba5...)
         status_code, token = self.__get_token(the_url)
         if not token:
             _L.debug("no token")
@@ -404,7 +443,7 @@ class ShiftClient:
         """Redeem a code with given form data"""
 
         the_url = f"{base_url}/code_redemptions"
-        headers = {"Referer": f"{the_url}/new"}
+        headers = {"Referer": f"{base_url}/rewards"}  # DEV Notes: Ported referer tweak from Fabbi (f957ba5...)
         r = self.client.post(the_url, data=data, headers=headers, allow_redirects=False)
         _L.debug(f"{r.request.method} {r.url} {r.status_code}")
         status = self.__check_redemption_status(r)
@@ -414,12 +453,34 @@ class ShiftClient:
         while status == Status.REDIRECT:
             if "code_redemptions/" in status.value:
                 redemption = True
-            _L.debug(f"redirect to '{status.value}'")
-            r2 = self.client.get(status.value)
-            _L.debug(
-                f"redirect returned: {r2.request.method} {r2.url} {r2.status_code} {r2.reason}"
-            )
-            status = self.__check_redemption_status(r2)
+                # DEV Notes: Ported in-progress polling loop from Fabbi (31b686c...)
+                while True:
+                    r2 = self.client.get(
+                        status.value,
+                        headers={
+                            "referer": status.value,
+                            "x-requested-with": "XMLHttpRequest",
+                            "accept": "application/json",
+                        },
+                    )
+                    json_data = r2.json()
+                    if json_data.get("in_progress", False):
+                        time.sleep(0.5)
+                        continue
+                    try:
+                        status = self.__get_status(json_data["text"])
+                    except KeyError as e:
+                        _L.error("Unexpected JSON response. Please report this issue!")
+                        _L.error(f"JSON data: {json_data}")
+                        raise e
+                    break
+            else:
+                _L.debug(f"redirect to '{status.value}'")
+                r2 = self.client.get(status.value)
+                _L.debug(
+                    f"redirect returned: {r2.request.method} {r2.url} {r2.status_code} {r2.reason}"
+                )
+                status = self.__check_redemption_status(r2)
 
         # workaround for new SHiFT website.
         # it doesn't tell you to launch a "SHiFT-enabled title" anymore
