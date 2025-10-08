@@ -27,6 +27,8 @@ import os
 FILEPATH = path.realpath(__file__)
 DIRNAME = path.dirname(FILEPATH)
 
+SLEEP_TIMER = int(os.getenv("SLEEP_TIMER", "60"))
+
 # Profile support: set AUTOSHIFT_PROFILE env var to choose a profile (e.g. "work", "home")
 PROFILE = os.getenv(
     "AUTOSHIFT_PROFILE"

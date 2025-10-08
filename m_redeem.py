@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from time import sleep
 from typing import List, Optional, Sequence
 
-from common import _L
+from common import _L, SLEEP_TIMER
 import query
 from query import Key
 from shift import Status
@@ -312,6 +312,11 @@ def _redeem_candidates(
             f"Trying to redeem {candidate.reward} ({candidate.code}) "
             f"on {candidate.platform} for {candidate.game}"
         )
+        if (candidate.previously_failed or "").upper() == "TRYLATER":
+            _L.info(
+                "\t-> Retrying now because SHiFT responded with 'TRY LATER' last time."
+            )
+            hit_try_later = True
 
         slowdown_retry = False
         while True:
@@ -326,10 +331,10 @@ def _redeem_candidates(
             status = getattr(shift_client, "last_status", Status.NONE)
             if status == Status.SLOWDOWN and not slowdown_retry:
                 _L.info(
-                    "Manual redeem hit SLOWDOWN; sleeping 60s before retrying same code."
+                    f"Manual redeem hit SLOWDOWN; sleeping {SLEEP_TIMER}s before retrying same code."
                 )
                 slowdown_retry = True
-                sleep(60)
+                sleep(SLEEP_TIMER)
                 continue
             if status == Status.SLOWDOWN:
                 _L.info(

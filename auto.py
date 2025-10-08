@@ -34,7 +34,7 @@ if "--profile" in sys.argv:
 from collections import deque
 from typing import TYPE_CHECKING, Optional
 
-from common import _L, DEBUG, INFO, data_path, DATA_DIR, PROFILE
+from common import _L, DEBUG, INFO, SLEEP_TIMER, data_path, DATA_DIR, PROFILE
 from m_redeem import maybe_handle_manual_redeem
 from redeem_logic import (
     RedemptionCandidate,
@@ -49,8 +49,6 @@ from shift import Status
 # Static choices so CLI parsing doesn't need to import query/db
 STATIC_GAMES = ["bl4", "bl3", "blps", "bl2", "bl1", "ttw", "gdfll"]
 STATIC_PLATFORMS = ["epic", "steam", "xboxlive", "psn", "nintendo", "stadia"]
-SLEEP_TIMER = int(os.getenv("SLEEP_TIMER", "60"))
-
 if TYPE_CHECKING:
     from query import Key
 
@@ -157,6 +155,9 @@ def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool
         _L.debug(f"{label}: previously recorded failure ({reason}); skipping remote call.")
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
+    elif candidate.skip_reason is None:
+        # Candidate is being retried (likely TRY LATER); log handled elsewhere.
+        return
     else:
         _L.debug(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
 
@@ -868,6 +869,11 @@ def main(args):
                     if pair_id in processed_pairs:
                         continue
                     attempt_key = _key_for_candidate(candidate)
+                    if (candidate.previously_failed or "").upper() == "TRYLATER":
+                        label = _format_pair(normalized_code, candidate)
+                        _L.info(
+                            f"\t{label}: retrying first because SHiFT asked to 'TRY LATER' last run."
+                        )
                     processed_pairs.add(pair_id)
 
                     # Per-item progress line
