@@ -27,6 +27,8 @@ After your first login your login-cookie (a string of seemingly random character
 
 `autoshift` tries to prevent being blocked when it redeems too many keys at once.
 
+> **Rate-limit pacing:** The tool waits 60 seconds between attempts after SHiFT signals a slowdown. You can change this by setting the `SLEEP_TIMER` environment variable (value in seconds) before running `auto.py`.
+
 You can choose to only redeem mods/skins etc, only golden keys or both. There is also a limit parameter so you don't waste your keys (there is a limit on how many bl2 keys your account can hold for example).
 
 ## Installation
