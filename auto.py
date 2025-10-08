@@ -965,9 +965,7 @@ def main(args):
                                 failed_ng += 1
                         else:
                             failed_codes += 1
-                        # don't spam if we reached the hourly limit
-                        if status == Status.TRYLATER:
-                            return
+                        # don't abort the entire run on TRY LATER; keep processing remaining queue
 
                 ignored_total = ignored_redeemed_g + ignored_redeemed_ng + ignored_redeemed_codes
                 if ignored_total:

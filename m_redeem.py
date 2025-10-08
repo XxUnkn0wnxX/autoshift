@@ -365,9 +365,7 @@ def _redeem_candidates(
             candidate.failure_detail = detail
 
         if status == Status.TRYLATER:
-            _L.info("Manual redeem received TRY LATER; stopping further attempts.")
             hit_try_later = True
-            break
 
     return results, hit_try_later
 
