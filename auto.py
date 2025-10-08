@@ -601,7 +601,21 @@ def main(args):
                 _L.info(f"Redeeming for {game} on {platform}")
                 t_keys = list(
                     filter(lambda key: not key.redeemed, all_keys[game][platform])
-                )                # Build categories & prioritised queue (global --limit aware; mode respected)
+                )
+                # Deduplicate codes per platform, preferring platform-specific copies over universal
+                dedup_map: dict[str, Key] = {}
+                for key in t_keys:
+                    code = getattr(key, "code", None)
+                    if not code:
+                        continue
+                    existing = dedup_map.get(code)
+                    if existing is None:
+                        dedup_map[code] = key
+                    elif getattr(existing, "platform", None) == "universal" and getattr(key, "platform", None) != "universal":
+                        dedup_map[code] = key
+                t_keys = list(dedup_map.values())
+
+                # Build categories & prioritised queue (global --limit aware; mode respected)
                 # DEV NOTE: Classification rules
                 #   - Golden Keys: reward matches r_golden_keys
                 #   - Non-Golden Keys: reward contains 'key' but not golden (e.g., Diamond keys)
