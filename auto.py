@@ -143,7 +143,9 @@ def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
     )
 
 
-def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool) -> None:
+def _log_auto_skip(
+    code: str, candidate: RedemptionCandidate, _bypass_fail: bool
+) -> Optional[tuple[str, str]]:
     label = _format_pair(code, candidate)
 
     def _bucket_label() -> str:
@@ -162,14 +164,12 @@ def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool
 
     if candidate.skip_reason == "redeemed":
         status = candidate.previously_redeemed_status or "UNKNOWN"
-        _L.debug(
-            f"{label}: previously recorded success ({status}); skipping remote call. [IGNORED {bucket}]"
-        )
+        detail = f"IGNORED {bucket}: {candidate.code or code} (status {status})"
+        return "ignored", detail
     elif candidate.skip_reason == "failed":
         reason = candidate.previously_failed or "UNKNOWN"
-        _L.debug(
-            f"{label}: previously recorded failure ({reason}); skipping remote call. [FAILED {bucket}]"
-        )
+        detail = f"FAILED {bucket} ({reason}): {candidate.code or code}"
+        return "failed", detail
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
     elif candidate.skip_reason is None:
@@ -177,6 +177,7 @@ def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool
         return
     else:
         _L.debug(f"{label}: skipping ({candidate.skip_reason or 'unknown'}).")
+    return None
 
 
 def parse_redeem_mapping(args):
@@ -857,10 +858,12 @@ def main(args):
                 ignored_redeemed_g = 0
                 ignored_redeemed_ng = 0
                 ignored_redeemed_codes = 0
+                ignored_detail_logs: list[str] = []
 
                 failed_g = 0
                 failed_ng = 0
                 failed_codes = 0
+                failed_detail_logs: list[str] = []
 
                 pending_queue = deque(redeem_queue)
                 overflow_index = len(redeem_queue)
@@ -916,7 +919,15 @@ def main(args):
                         )
                         continue
                     if disposition == "skip":
-                        _log_auto_skip(normalized_code, candidate, bypass_fail)
+                        detail_entry = _log_auto_skip(normalized_code, candidate, bypass_fail)
+                        if detail_entry:
+                            category, detail = detail_entry
+                            if category == "ignored":
+                                ignored_detail_logs.append(detail)
+                            elif category == "failed":
+                                failed_detail_logs.append(detail)
+                            else:
+                                _L.debug(detail)
                         if client.last_status == Status.SLOWDOWN:
                             client.last_status = Status.NONE
                         if (
@@ -1062,12 +1073,18 @@ def main(args):
                 _L.info(
                     f"\t{ignored_redeemed_g} Golden Keys, {ignored_redeemed_ng} Non-Golden Keys, {ignored_redeemed_codes} Codes IGNORED (already redeemed)."
                 )
+                if ignored_detail_logs:
+                    for detail in dict.fromkeys(ignored_detail_logs):
+                        _L.debug(f"\t{detail}")
 
                 # Pull failure totals from the persisted failed_keys table (includes current session updates).
                 total_failed_g, total_failed_ng, total_failed_codes = _load_failed_totals(game, platform)
                 _L.info(
                     f"\t{total_failed_g} Golden Keys, {total_failed_ng} Non-Golden Keys, {total_failed_codes} Codes FAILED."
                 )
+                if failed_detail_logs:
+                    for detail in dict.fromkeys(failed_detail_logs):
+                        _L.debug(f"\t{detail}")
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
         # DEV NOTE: We track any_keys_redeemed/any_codes_redeemed to produce a truthful final summary.
