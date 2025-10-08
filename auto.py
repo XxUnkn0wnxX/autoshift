@@ -146,13 +146,10 @@ def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
 def _log_auto_skip(
     code: str, candidate: RedemptionCandidate, _bypass_fail: bool
 ) -> Optional[tuple[str, str]]:
+    import query
     label = _format_pair(code, candidate)
 
     def _bucket_label() -> str:
-        try:
-            import query
-        except Exception:
-            return "Code"
         reward_text = (getattr(candidate, "reward", "") or "").strip()
         if query.r_golden_keys.match(reward_text):
             return "Golden Key"
@@ -164,11 +161,13 @@ def _log_auto_skip(
 
     if candidate.skip_reason == "redeemed":
         status = candidate.previously_redeemed_status or "UNKNOWN"
-        detail = f"IGNORED {bucket}: {candidate.code or code} (status {status})"
+        reward = (getattr(candidate, "reward", "") or "Unknown").strip()
+        detail = f"IGNORED {bucket} ({reward}, status {status}): {candidate.code or code}"
         return "ignored", detail
     elif candidate.skip_reason == "failed":
         reason = candidate.previously_failed or "UNKNOWN"
-        detail = f"FAILED {bucket} ({reason}): {candidate.code or code}"
+        reward = (getattr(candidate, "reward", "") or "Unknown").strip()
+        detail = f"FAILED {bucket} ({reward}, status {reason}): {candidate.code or code}"
         return "failed", detail
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
