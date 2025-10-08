@@ -310,6 +310,10 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
     for g in all_keys:
         for p in all_keys[g]:
             platform_rows, universal_rows = _split_summary_rows(g, p)
+            if not platform_rows and not universal_rows:
+                _L.info(f"No unredeemed keys or codes for {g} on {p}")
+                continue
+
             golden_count, non_golden_count, codes_count = _count_reward_rows(platform_rows)
             _L.info(
                 f"You have {golden_count} Golden Keys, {non_golden_count} Non-Golden Keys, {codes_count} Other Codes for {g} to redeem for {p}"
