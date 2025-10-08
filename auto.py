@@ -145,14 +145,31 @@ def _key_for_candidate(candidate: RedemptionCandidate) -> Key:
 
 def _log_auto_skip(code: str, candidate: RedemptionCandidate, _bypass_fail: bool) -> None:
     label = _format_pair(code, candidate)
+
+    def _bucket_label() -> str:
+        try:
+            import query
+        except Exception:
+            return "Code"
+        reward_text = (getattr(candidate, "reward", "") or "").strip()
+        if query.r_golden_keys.match(reward_text):
+            return "Golden Key"
+        if "key" in reward_text.lower():
+            return "Non-Golden Key"
+        return "Code"
+
+    bucket = _bucket_label()
+
     if candidate.skip_reason == "redeemed":
         status = candidate.previously_redeemed_status or "UNKNOWN"
         _L.debug(
-            f"{label}: previously recorded success ({status}); skipping remote call."
+            f"{label}: previously recorded success ({status}); skipping remote call. [IGNORED {bucket}]"
         )
     elif candidate.skip_reason == "failed":
         reason = candidate.previously_failed or "UNKNOWN"
-        _L.debug(f"{label}: previously recorded failure ({reason}); skipping remote call.")
+        _L.debug(
+            f"{label}: previously recorded failure ({reason}); skipping remote call. [FAILED {bucket}]"
+        )
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
     elif candidate.skip_reason is None:
