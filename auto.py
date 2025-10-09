@@ -1168,7 +1168,7 @@ if __name__ == "__main__":
     _L.setLevel(INFO)
     if args.verbose:
         _L.setLevel(DEBUG)
-        _L.debug("Debug mode on")
+        _L.debug("[#AF0000]Debug mode on[/]", extra={"rich_markup": True})
 
     if getattr(args, "dump_csv", None):
         dump_db_to_csv(args.dump_csv)
