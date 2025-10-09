@@ -34,7 +34,7 @@ When constructing the `--redeem` argument you can reference the same short codes
 | `bl2` | Borderlands 2 |
 | `bl1` | Borderlands: Game of the Year Edition |
 | `ttw` | Tiny Tina’s Wonderlands |
-| `gdfll` |  |
+| `gdfll` | Godfall |
 
 - Platforms: `epic`, `steam`, `xboxlive`, `psn`, `nintendo`, `stadia`
 
