@@ -36,7 +36,7 @@ from typing import (
 
 import requests
 
-from common import _L, DIRNAME
+from common import _L, DIRNAME, dim_text
 
 try:
     from common import DATA_DIR, data_path
