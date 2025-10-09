@@ -2,7 +2,7 @@ import os
 import re
 import sqlite3
 from typing import List, Union
-from common import DIRNAME, _L
+from common import DIRNAME, _L, dim_text
 
 try:
     from common import DATA_DIR, data_path
@@ -137,7 +137,8 @@ def update_1(conn: sqlite3.Connection):
         )
 
     for i, step in enumerate(steps):
-        _L.debug("executing step {} of update_1".format(i))
+        message = "executing step {} of update_1".format(i)
+        _L.debug(dim_text(message), extra={"rich_markup": True})
         try:
             if isinstance(step, tuple):
                 c.execute(*step)
