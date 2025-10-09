@@ -302,6 +302,10 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
                 universal_rows.append(row)
             else:
                 platform_rows.append(row)
+
+        if not platform_rows and universal_rows:
+            platform_rows = universal_rows
+            universal_rows = []
         return platform_rows, universal_rows
 
     # Always print info for all requested game/platform pairs
