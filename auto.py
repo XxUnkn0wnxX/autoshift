@@ -34,7 +34,17 @@ if "--profile" in sys.argv:
 from collections import deque
 from typing import TYPE_CHECKING, Optional
 
-from common import _L, DEBUG, INFO, SLEEP_TIMER, data_path, DATA_DIR, PROFILE
+from common import (
+    _L,
+    DEBUG,
+    INFO,
+    SLEEP_TIMER,
+    data_path,
+    DATA_DIR,
+    PROFILE,
+    dim_text,
+)
+from rich.markup import escape
 from m_redeem import maybe_handle_manual_redeem
 from redeem_logic import (
     RedemptionCandidate,
@@ -162,12 +172,14 @@ def _log_auto_skip(
     if candidate.skip_reason == "redeemed":
         status = (candidate.previously_redeemed_status or "UNKNOWN").upper()
         reward = (getattr(candidate, "reward", "") or "Unknown").strip()
-        detail = f"IGNORED {bucket} ({reward}) [{status}]: {candidate.code or code}"
+        raw_detail = f"IGNORED {bucket} ({reward}) [{status}]: {candidate.code or code}"
+        detail = f"[#FFD700]{escape(raw_detail)}[/]"
         return "ignored", detail
     elif candidate.skip_reason == "failed":
         reason = (candidate.previously_failed or "UNKNOWN").upper()
         reward = (getattr(candidate, "reward", "") or "Unknown").strip()
-        detail = f"FAILED {bucket} ({reward}) [{reason}]: {candidate.code or code}"
+        raw_detail = f"FAILED {bucket} ({reward}) [{reason}]: {candidate.code or code}"
+        detail = f"[#AF0000]{escape(raw_detail)}[/]"
         return "failed", detail
     elif candidate.skip_reason == "expired":
         _L.debug(f"{label}: source expired; recording EXPIRED without remote call.")
@@ -254,7 +266,8 @@ def query_keys_with_mapping(redeem_mapping, games, platforms):
             for key in p_keys:
                 temp_key = key
                 for p in _ps:
-                    _L.debug(f"Platform: {p}, {key}")
+                    platform_msg = dim_text(f"Platform: {p}, {key}")
+                    _L.debug(platform_msg, extra={"rich_markup": True})
                     all_keys[g][p].append(temp_key.copy().set(platform=p))
 
     def _count_reward_rows(rows):
@@ -1099,7 +1112,7 @@ def main(args):
                 )
                 if ignored_detail_logs:
                     for detail in dict.fromkeys(ignored_detail_logs):
-                        _L.debug(f"\t{detail}")
+                        _L.debug(f"\t{detail}", extra={"rich_markup": True})
 
                 # Pull failure totals from the persisted failed_keys table (includes current session updates).
                 total_failed_g, total_failed_ng, total_failed_codes = _load_failed_totals(game, platform)
@@ -1108,7 +1121,7 @@ def main(args):
                 )
                 if failed_detail_logs:
                     for detail in dict.fromkeys(failed_detail_logs):
-                        _L.debug(f"\t{detail}")
+                        _L.debug(f"\t{detail}", extra={"rich_markup": True})
 
         # Final end-of-run label: based on flags, or on what was actually redeemed
         # DEV NOTE: We track any_keys_redeemed/any_codes_redeemed to produce a truthful final summary.
