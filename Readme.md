@@ -36,9 +36,10 @@ When constructing the `--redeem` argument you can reference the same short codes
 | `ttw` | Tiny Tina’s Wonderlands |
 | `gdfll` | Godfall |
 
-- Platforms: `epic`, `steam`, `xboxlive`, `psn`, `nintendo`, `stadia`
+- Platforms: `epic`, `steam`, `xbox`, `psn`, `nintendo`, `stadia`
+  - (Legacy alias `xboxlive` is still accepted and normalized to `xbox`.)
 
-For example, `--redeem bl3:steam,psn` targets Borderlands 3 on Steam and PlayStation Network, while `--redeem ttw:xboxlive` redeems Tiny Tina’s Wonderlands on Xbox Live.
+For example, `--redeem bl3:steam,psn` targets Borderlands 3 on Steam and PlayStation Network, while `--redeem ttw:xbox` redeems Tiny Tina’s Wonderlands on Xbox Live.
 
 *This tool doesn't save your login data anywhere on your machine!*
 After your first login your login-cookie (a string of seemingly random characters) is saved to the `data` folder and reused every time you use `autoshift` after that.
