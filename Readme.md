@@ -22,6 +22,24 @@ Games currently that are scraped and made available to `autoshift` are:
 
 To see which games and platforms are supported use the `auto.py --help` command.
 
+### Game and platform codes for `--redeem`
+
+When constructing the `--redeem` argument you can reference the same short codes that `auto.py` exposes via its `STATIC_GAMES` and `STATIC_PLATFORMS` constants:
+
+| Game code | Full title |
+| --- | --- |
+| `bl4` | Borderlands 4 |
+| `bl3` | Borderlands 3 |
+| `blps` | Borderlands: The Pre-Sequel |
+| `bl2` | Borderlands 2 |
+| `bl1` | Borderlands: Game of the Year Edition |
+| `ttw` | Tiny Tina’s Wonderlands |
+| `gdfll` |  |
+
+- Platforms: `epic`, `steam`, `xboxlive`, `psn`, `nintendo`, `stadia`
+
+For example, `--redeem bl3:steam,psn` targets Borderlands 3 on Steam and PlayStation Network, while `--redeem ttw:xboxlive` redeems Tiny Tina’s Wonderlands on Xbox Live.
+
 *This tool doesn't save your login data anywhere on your machine!*
 After your first login your login-cookie (a string of seemingly random characters) is saved to the `data` folder and reused every time you use `autoshift` after that.
 
