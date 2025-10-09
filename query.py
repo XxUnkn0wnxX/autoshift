@@ -376,7 +376,8 @@ class Database(ContextManager):
         )
         if el.fetchone():
             return None
-        _L.debug(f"== inserting {key.game} Key '{key.code}' for {key.platform} ==")
+        message = f"== inserting {key.game} Key '{key.code}' for {key.platform} =="
+        _L.debug(dim_text(message), extra={"rich_markup": True})
         self.execute(
             "INSERT INTO keys(reward, code, platform, game, source) VALUES (?,?,?,?,?)",
             (
