@@ -364,7 +364,7 @@ def dump_db_to_csv(filename):
     with db:
         conn = db._Database__conn  # Access the underlying sqlite3.Connection
         c = conn.cursor()
-        c.execute("SELECT * FROM keys")
+        c.execute("SELECT code, platform, game FROM keys")
         rows = c.fetchall()
         if not rows:
             profile_label = PROFILE or "default"
@@ -372,16 +372,25 @@ def dump_db_to_csv(filename):
                 f"Database for profile '{profile_label}' contains no keys. Run autoshift to load SHiFT codes before exporting."
             )
             sys.exit(2)
-        headers = [desc[0] for desc in c.description]
+
+        unique = {}
+        for row in rows:
+            key = (row["code"], row["game"])
+            existing = unique.get(key)
+            if existing is None:
+                unique[key] = row
+                continue
+            if existing["platform"] != "universal" and row["platform"] == "universal":
+                unique[key] = row
+
+        ordered_rows = sorted(unique.values(), key=lambda r: (r["game"], r["code"], r["platform"]))
+
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(headers)
-            for row in rows:
-                try:
-                    writer.writerow([row[h] for h in headers])  # sqlite3.Row path
-                except Exception:
-                    writer.writerow(list(row))  # tuple fallback
-        _L.info(f"Dumped {len(rows)} rows to {out_path}")
+            writer.writerow(["code", "platform", "game"])
+            for row in ordered_rows:
+                writer.writerow([row["code"], row["platform"], row["game"]])
+        _L.info(f"Dumped {len(ordered_rows)} rows to {out_path}")
 
 
 def setup_argparser():
