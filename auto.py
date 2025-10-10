@@ -364,7 +364,8 @@ def dump_db_to_csv(filename):
     with db:
         conn = db._Database__conn  # Access the underlying sqlite3.Connection
         c = conn.cursor()
-        c.execute("SELECT code, platform, game FROM keys")
+        # Preserve the table's insertion order explicitly so exports match the DB
+        c.execute("SELECT code, platform, game FROM keys ORDER BY rowid")
         rows = c.fetchall()
         if not rows:
             profile_label = PROFILE or "default"
@@ -373,17 +374,18 @@ def dump_db_to_csv(filename):
             )
             sys.exit(2)
 
-        unique = {}
+        ordered_rows = []
+        index_by_key = {}
         for row in rows:
             key = (row["code"], row["game"])
-            existing = unique.get(key)
-            if existing is None:
-                unique[key] = row
+            position = index_by_key.get(key)
+            if position is None:
+                index_by_key[key] = len(ordered_rows)
+                ordered_rows.append(row)
                 continue
+            existing = ordered_rows[position]
             if existing["platform"] != "universal" and row["platform"] == "universal":
-                unique[key] = row
-
-        ordered_rows = sorted(unique.values(), key=lambda r: (r["game"], r["code"], r["platform"]))
+                ordered_rows[position] = row
 
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
