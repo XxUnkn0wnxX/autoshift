@@ -365,7 +365,7 @@ def dump_db_to_csv(filename):
         conn = db._Database__conn  # Access the underlying sqlite3.Connection
         c = conn.cursor()
         # Preserve the table's insertion order explicitly so exports match the DB
-        c.execute("SELECT code, platform, game FROM keys ORDER BY rowid")
+        c.execute("SELECT code, reward, platform, game FROM keys ORDER BY rowid")
         rows = c.fetchall()
         if not rows:
             profile_label = PROFILE or "default"
@@ -389,9 +389,9 @@ def dump_db_to_csv(filename):
 
         with open(out_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["code", "platform", "game"])
+            writer.writerow(["code", "reward", "platform", "game"])
             for row in ordered_rows:
-                writer.writerow([row["code"], row["platform"], row["game"]])
+                writer.writerow([row["code"], row["reward"], row["platform"], row["game"]])
         _L.info(f"Dumped {len(ordered_rows)} rows to {out_path}")
 
 
